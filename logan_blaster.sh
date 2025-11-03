@@ -54,19 +54,32 @@ run_blast() {
     local OUTPUT_NAME="${QUERY_ID}_vs_${TARGET_BASENAME}.txt"
 
 
-    echo -e "${YELLOW}[INFO] Creating BLAST database from ${TARGET_FASTA}...${NOCOLOR}"
-    echo -e "${GREEN}makeblastdb -dbtype nucl -in \"${TARGET_FASTA}\" -out \"targets_db\"${NOCOLOR}"
-    makeblastdb -dbtype nucl -in "$TARGET_FASTA" -out "targets_db" >/dev/null 2>&1
 
     echo -e "${YELLOW}[INFO] Aligning ${TARGET_BASENAME} vs ${QUERY_BASENAME}...${NOCOLOR}"
-    echo -e "${GREEN}blastn -query \"${QUERY_FASTA}\" -db \"targets_db\" -out \"${OUTPUT_NAME}\" -outfmt 0 -sorthits 0${NOCOLOR}"
-    blastn \
-        -query "${QUERY_FASTA}" \
-        -db "targets_db" \
-        -out "${ALIGNEMENT_DIR_NAME}/${OUTPUT_NAME}" \
+    # echo -e "${GREEN}blastn -query \"${QUERY_FASTA}\" -subject  "$TARGET_FASTA" -out \"${OUTPUT_NAME}\" -outfmt 0 -sorthits 0${NOCOLOR}"
+    cmd="blastn \
+        -query ${QUERY_FASTA} \
+        -subject  $TARGET_FASTA \
+        -out ${ALIGNEMENT_DIR_NAME}/${OUTPUT_NAME} \
         -outfmt 0 \
-        -sorthits 0 >/dev/null 2>&1
-    rm -f targets_db*
+        -sorthits 0 \
+        -word_size 11 \
+        -gapextend 2 \
+        -gapopen 5 \
+        -reward 2 \
+        -penalty -3"
+
+    echo -e "${GREEN}Running command: ${cmd}${NOCOLOR}"
+    ${cmd}  >/dev/null 2> error.log
+    ## Check that blastn ran successfully
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Error: blastn failed"
+        cat error.log
+        echo -e "${NOCOLOR}"
+        rm -f error.log
+        exit 1
+    fi
+    rm -f error.log
 }
 
 while [[ $# -gt 0 ]]; do
@@ -269,7 +282,18 @@ while read accession; do
 	fi
 	echo -e "${YELLOW}[INFO] Recruiting sequences from ${accession}.${type}s.fa.zst with a match with ${QUERY_FILE}...${NOCOLOR}"
 	echo -e "${GREEN}back_to_sequences --kmer-size ${KMER_SIZE} --in-kmers ${QUERY_FILE} --in-sequences ${LOGAN_DIR_NAME}/${accession}.${type}s.fa.zst --out-sequences ${LOGAN_DIR_NAME}/${accession}.recruited_${type}s.fa${NOCOLOR}"
-	back_to_sequences --kmer-size ${KMER_SIZE} --in-kmers ${QUERY_FILE} --in-sequences  ${LOGAN_DIR_NAME}/${accession}.${type}s.fa.zst --out-sequences ${LOGAN_DIR_NAME}/${accession}.recruited_${type}s.fa > /dev/null 2>&1
+	back_to_sequences --kmer-size ${KMER_SIZE} --in-kmers ${QUERY_FILE} --in-sequences  ${LOGAN_DIR_NAME}/${accession}.${type}s.fa.zst --out-sequences ${LOGAN_DIR_NAME}/${accession}.recruited_${type}s.fa > /dev/null 2> error.log
+    ## Check that back_to_sequences ran successfully
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Error: back_to_sequences failed for accession ${accession}."
+        cat error.log
+        echo -e "${NOCOLOR}"
+        rm -f error.log
+        exit 1
+    fi
+    rm -f error.log
+
+
 
     ## check if any sequences were recruited
     if [ ! -s "${LOGAN_DIR_NAME}/${accession}.recruited_${type}s.fa" ]; then
