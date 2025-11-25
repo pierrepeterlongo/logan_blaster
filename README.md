@@ -7,9 +7,11 @@ Align genomic sequences with [Logan](https://github.com/IndexThePlanet/Logan/) c
 2. From a [Logan-Search](https://logan-search.org/) session id. The query and Logan accessions are then automaticaly retreived.
 
 In any case, for each accession, `logan_blaster` 
-1. Dowloads the Logan contigs,
+1. Downloads the Logan contigs,
 2. Recruits contigs that contain at least one shared k-mer (k=17 by default) with the query (uses `[back_to_sequences](https://github.com/pierrepeterlongo/back_to_sequences)`), 
 3. Runs a local blast between the query and this subset of contigs.
+4. Analyses the blast results: prints the portion(s) of the query matched by at least contig of the accession
+
 
 
 ## Requires 
@@ -47,6 +49,21 @@ This usage enables to select specific accessions to process, also ordering them,
 ```bash
 ./logan_blaster.sh  -a example/accessions.txt -q example/query.fa
 ```
+
+## Output format.
+In the created directory (named with either the session name or the query name), in the sub `alignments` directory, files named `synth*` contain this piece of information: 
+
+```bash
+query    1  CTTCCCTCTAGAACGGGACGAGGTGATGCCCCCACCCATCTCGCACCCCCCATGTGAAAGGCTCACATTCCCGAAGGGGC
+            aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbb
+
+query   81  TTCCCTGGGCTCCGAAGGTCAGGGAGAAGGATATTGAGATGTTCCTTGAAAACAGTCGCAGCAAATTCATTGGCTACACG
+            aaaaaaaaaaaabbbbbbbbbcccccccccbbbbbcdddccccccdddddddccbbaaaaaaaaaaaaaaaaaaaaaaaa
+```
+
+In this case, the full query was aligned to at least one contig. Some portions were aligned to two contigs (positions labeled 'b'), or three contigs (positions labeled 'c'), and so on.
+All positions aligned to more than 26 contigs are labeled 'Z'.
+
 
 ## Authors
 - [Pierre Peterlongo](https://people.rennes.inria.fr/Pierre.Peterlongo/)

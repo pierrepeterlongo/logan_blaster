@@ -20,6 +20,8 @@ BLUE='\033[1;034m'
 CYAN='\033[1;36m'
 NOCOLOR='\033[0m'
 
+SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+
 
 print_help() {
     echo -e "Usage: $0 --session <logan seesion ID> or (--query <query_file.fa> --accessions <accessions.txt>) [--delete] [--kmer-size <k>] [--limit <n>]"
@@ -44,14 +46,13 @@ run_blast() {
     local TARGET_FASTA="$2"
 
 
-
     local QUERY_BASENAME
     local TARGET_BASENAME
     QUERY_BASENAME=$(basename "${QUERY_FASTA%.*}")
     TARGET_BASENAME=$(basename "${TARGET_FASTA%.*}")
     local QUERY_ID
     QUERY_ID=$(grep -m1 '^>' "$QUERY_FASTA" | sed 's/^>//;s/ .*//')
-    local OUTPUT_NAME="${QUERY_ID}_vs_${TARGET_BASENAME}.txt"
+    OUTPUT_NAME="${QUERY_ID}_vs_${TARGET_BASENAME}.txt"
 
 
 
@@ -80,6 +81,20 @@ run_blast() {
         exit 1
     fi
     rm -f error.log
+	
+	## Run the blast_parser on blast results
+	echo -e "${YELLOW}[INFO] Synthetize blast results ${NOCOLOR}"
+	cmd="python3 ${SCRIPT_DIR}/scripts/blast_parser.py \
+		--fasta_file "$QUERY_FILE" \
+		--blastn_file ${ALIGNEMENT_DIR_NAME}/${OUTPUT_NAME} \
+		--abundance"
+	echo -e "${GREEN}Running command: $cmd > ${ALIGNEMENT_DIR_NAME}/synth_${OUTPUT_NAME} ${NOCOLOR}"
+	$cmd > ${ALIGNEMENT_DIR_NAME}/synth_${OUTPUT_NAME}
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}Error: ${SCRIPT_DIR}/scripts/blast_parser.py failed"
+        exit 1
+    fi
+	
 }
 
 while [[ $# -gt 0 ]]; do
@@ -308,14 +323,15 @@ while read accession; do
 
 	echo -e "${YELLOW}[INFO] Aligning recruited sequences from ${accession}.${type}s.fa.zst with ${QUERY_FILE}...${NOCOLOR}"
     echo run_blast "$QUERY_FILE" "${accession}.recruited_${type}s.fa"
-    run_blast "$QUERY_FILE" "${LOGAN_DIR_NAME}/${accession}.recruited_${type}s.fa"
+	run_blast "$QUERY_FILE" "${LOGAN_DIR_NAME}/${accession}.recruited_${type}s.fa"
     if [ "$DELETE" = true ]; then
         echo -e "${YELLOW}[INFO] Deleting ${accession}.recruited_${type}s.fa and ${accession}.${type}s.fa.zst...${NOCOLOR}"
         rm -f ${LOGAN_DIR_NAME}/${accession}.recruited_${type}s.fa
         rm -f ${LOGAN_DIR_NAME}/${accession}.${type}s.fa.zst
     fi
-    # Clean the blast db files
-    # rm -f ${accession}.recruited_${type}s_vs_${QUERY_BASENAME}/targets_db*
+	
+	
+	
 done < ${ACCESSION_FILE}
 
 echo
