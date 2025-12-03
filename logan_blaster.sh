@@ -388,6 +388,6 @@ echo -e "${YELLOW}[INFO] Results can be found in directory ${CYAN}${MAIN_DIR_NAM
 # if contigs were asked, and some accessions failed, inform user
 if [ "$UNITIGS" = false ] && [ -s "${MAIN_DIR_NAME}/${failed_accession_list}" ]; then
     echo -e "${YELLOW}[INFO] Some accessions failed to download contigs or had no recruited sequences.${NOCOLOR}"
-    echo -e "${YELLOW}[INFO] You can try to re-run the script with --unitigs option and the accessions listed in ${CYAN}${MAIN_DIR_NAME}/${failed_accession_list}${NOCOLOR}"
     echo -e "${YELLOW}[INFO] List of failed accessions: ${CYAN}${MAIN_DIR_NAME}/${failed_accession_list}${NOCOLOR}"
+    echo -e "${YELLOW}[INFO] You can try to re-run the script with --unitigs option and this accession list.${NOCOLOR}"
 fi  
