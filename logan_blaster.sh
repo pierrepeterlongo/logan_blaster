@@ -22,6 +22,14 @@ NOCOLOR='\033[0m'
 
 SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
 
+# Detect if aws cli is installed
+cli_installed=true
+if ! command -v aws >/dev/null 2>&1; then
+    cli_installed=false
+fi
+
+failed_accession_list=""
+
 
 print_help() {
     echo -e "Usage: $0 --session <logan seesion ID> or (--query <query_file.fa> --accessions <accessions.txt>) [--delete] [--kmer-size <k>] [--limit <n>]"
@@ -40,7 +48,6 @@ print_help() {
 }
 
 run_blast() {
-    set -euo pipefail
 
     local QUERY_FASTA="$1"
     local TARGET_FASTA="$2"
@@ -158,6 +165,15 @@ if [[ -n "$SESSION_ID" ]]; then
     MAIN_DIR_NAME="session_${SESSION_ID}"
     mkdir "$MAIN_DIR_NAME" 
     cd "$MAIN_DIR_NAME" || exit 1
+
+    # If contigs were asked, create a list of accessions that failed, 
+    # either because download failed, or no contigs were available
+    # in this case we propose to try unitigs instead
+    if [ "$UNITIGS" = false ]; then
+        failed_accession_list="failed_accessions.txt"
+        touch ${failed_accession_list}
+    fi
+    
 else
     # We have a query file.
 
@@ -173,6 +189,14 @@ else
             cp "../${ACCESSION_FILE}" ${INPUT_DATA_DIR_NAME}
             QUERY_FILE=${INPUT_DATA_DIR_NAME}/$(basename "${QUERY_FILE}")
             ACCESSION_FILE=${INPUT_DATA_DIR_NAME}/$(basename "${ACCESSION_FILE}")
+
+            # If contigs were asked, create a list of accessions that failed, 
+            # either because download failed, or no contigs were available
+            # in this case we propose to try unitigs instead
+            if [ "$UNITIGS" = false ]; then
+                failed_accession_list="failed_accessions.txt"
+                touch ${failed_accession_list}
+            fi
             break
         fi
     done
@@ -278,17 +302,28 @@ while read accession; do
     echo -e "\033[1;34m==========================================${NOCOLOR}"
 	if [ ! -f "${LOGAN_DIR_NAME}/${accession}.${type}s.fa.zst" ]; then
 		echo -e "${YELLOW}[INFO]Downloading ${accession}.${type}s.fa.zst...${NOCOLOR}"
-        if [ "$UNITIGS" = false ]; then
-            wget https://s3.amazonaws.com/logan-pub/c/${accession}/${accession}.contigs.fa.zst 
+        if [ "$cli_installed" = true ]; then
+            if [ "$UNITIGS" = false ]; then
+                cmd_dl="aws s3 cp s3://logan-pub/c/${accession}/${accession}.contigs.fa.zst . --no-sign-request"
             else 
-            wget https://s3.amazonaws.com/logan-pub/u/${accession}/${accession}.unitigs.fa.zst
+                cmd_dl="aws s3 cp s3://logan-pub/u/${accession}/${accession}.unitigs.fa.zst . --no-sign-request"
+            fi
+        else
+            if [ "$UNITIGS" = false ]; then
+                cmd_dl="wget https://s3.amazonaws.com/logan-pub/c/${accession}/${accession}.contigs.fa.zst"
+                else 
+                cmd_dl="wget https://s3.amazonaws.com/logan-pub/u/${accession}/${accession}.unitigs.fa.zst"
+            fi
         fi
-
+        echo -e "${GREEN}Running command: ${cmd_dl}${NOCOLOR}"
+        eval $cmd_dl
+        ## Check that download ran successfully
         if [ $? -ne 0 ]; then
             echo -e "${RED}Error: Failed to download ${accession}.${type}s.fa.zst from S3. Skipping this accession.${NOCOLOR}"
             if [ "$UNITIGS" = false ]; then
                 echo -e "${RED}This usually occurs because some logan accessions do not have contigs files (they have only unitigs files).${NOCOLOR}"
             fi
+            echo "${accession}" >> ${failed_accession_list}
             continue
         fi
         mv ${accession}.${type}s.fa.zst ${LOGAN_DIR_NAME}/
@@ -318,6 +353,7 @@ while read accession; do
             rm -f ${LOGAN_DIR_NAME}/${accession}.recruited_${type}s.fa
             rm -f ${LOGAN_DIR_NAME}/${accession}.${type}s.fa.zst
         fi
+        echo "${accession}" >> ${failed_accession_list}
         continue
     fi
 
@@ -349,3 +385,9 @@ cd ..
 
 echo
 echo -e "${YELLOW}[INFO] Results can be found in directory ${CYAN}${MAIN_DIR_NAME}${NOCOLOR}"
+# if contigs were asked, and some accessions failed, inform user
+if [ "$UNITIGS" = false ] && [ -s "${MAIN_DIR_NAME}/${failed_accession_list}" ]; then
+    echo -e "${YELLOW}[INFO] Some accessions failed to download contigs or had no recruited sequences.${NOCOLOR}"
+    echo -e "${YELLOW}[INFO] You can try to re-run the script with --unitigs option and the accessions listed in ${CYAN}${MAIN_DIR_NAME}/${failed_accession_list}${NOCOLOR}"
+    echo -e "${YELLOW}[INFO] List of failed accessions: ${CYAN}${MAIN_DIR_NAME}/${failed_accession_list}${NOCOLOR}"
+fi  
