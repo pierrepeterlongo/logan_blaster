@@ -31,15 +31,15 @@ mamba activate logan_blaster
 cargo install back_to_sequences
 ```
 
-#### From sources
+### From sources
 
-##### Requires 
+#### Requires 
 
 - blast: *on mac* `brew install blast` or look at [blast installation web page](https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/)
 - back_to_sequences: see back_to_sequences installation [web page](https://b2s-doc.readthedocs.io/en/latest/usage.html#installation])
 - jq: see [jq installation web page](https://jqlang.org/)
 
-##### Clone the repository
+#### Clone the repository
 
 ```bash
 git clone https://github.com/pierrepeterlongo/logan_blaster
