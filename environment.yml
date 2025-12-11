@@ -6,10 +6,6 @@ channels:
 dependencies:
   - python>=3.8
   - blast
-  - biopython
-  - pandas
-  - openpyxl
-  - requests
   - pip
   - setuptools
   - jq
