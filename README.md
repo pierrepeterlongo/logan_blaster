@@ -151,25 +151,77 @@ In this case, except for the first three nucleotides, the full query was aligned
 All positions aligned to more than 26 contigs are labeled 'Z'.
 
 
+## Tests
+
+The test suite uses [pytest](https://pytest.org) and is organised in two files:
+
+| File | Content | External tools required |
+|---|---|---|
+| `tests/test_blast_parser.py` | Unit tests for all blast-parser functions | none |
+| `tests/test_integration.py` | Pipeline integration tests with local and remote data | `blastn`, `back_to_sequences`, `zstd` |
+
+### Running the tests
+
+```bash
+# Unit tests + local integration tests (no network, ~3 s)
+pytest
+
+# Include network tests (download one Logan accession)
+pytest --network
+```
+
+### Test categories
+
+**Unit tests** (`test_blast_parser.py`) — always fast, no external tools:
+- `TestGetQueryACGT` — FASTA reading (single sequence, multiline, multi-record)
+- `TestGetQueryName` / `TestGetQueryLength` — blast output header parsing
+- `TestParseBLASTN` — position-coverage vector: spot-checks on known overlaps (single, double, triple coverage computed from `tests/data/self_blast.txt`)
+- `TestRunBlastParser` — byte-exact comparison of the full visualisation output against `tests/data/expected_self_synth.txt`
+
+**Local integration tests** (`test_integration.py`, no network):
+- `TestRunBlast` — calls `_run_blast()` with the query aligned against itself; verifies that the blastn and synth files are created and match the reference
+- `TestFullPipelineLocal` — runs the complete `_process_accessions()` loop with a pre-placed `.fa.zst` file (the query compressed with `zstd`); checks file creation, synth content, and absence of failed accessions
+
+**Network integration tests** (`test_integration.py`, `--network` flag required):
+- `TestFullPipelineNetwork` — downloads the first accession from `example/accessions.txt` and verifies output structure and synth format
+
+### Reference test data
+
+```
+tests/
+├── data/
+│   ├── self_blast.txt           blastn output: example/query.fa vs itself
+│   └── expected_self_synth.txt  reference synth visualisation (byte-exact)
+├── conftest.py                  shared fixtures and --network option
+├── test_blast_parser.py
+└── test_integration.py
+```
+
+`self_blast.txt` and `expected_self_synth.txt` are committed and serve as the non-regression baseline. Regenerate them if the query file or blastn parameters change:
+
+```bash
+# Regenerate self_blast.txt
+blastn -query example/query.fa -subject example/query.fa \
+       -out tests/data/self_blast.txt \
+       -outfmt 0 -sorthits 0 -word_size 11 -gapextend 2 -gapopen 5 -reward 2 -penalty -3
+
+# Regenerate expected_self_synth.txt
+python3 -c "
+import sys, io, contextlib
+sys.path.insert(0, '.')
+from logan_blaster import run_blast_parser
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    run_blast_parser('example/query.fa', 'tests/data/self_blast.txt', abundance=True)
+open('tests/data/expected_self_synth.txt', 'w').write(buf.getvalue())
+"
+```
+
 ## Versioning
 
 Versions follow [Semantic Versioning](https://semver.org/) and are driven by **git tags**.
 The version displayed by `logan_blaster --version` is derived automatically from the latest tag.
 
-### Creating a new release
-
-```bash
-# 1. Commit all changes
-git commit -am "Release vX.Y.Z"
-
-# 2. Create an annotated tag
-git tag -a vX.Y.Z -m "Release vX.Y.Z"
-
-# 3. Push the tag
-git push origin vX.Y.Z
-```
-
-The tag is the single source of truth — no need to edit the version manually anywhere in the code.
 
 ## Authors
 
