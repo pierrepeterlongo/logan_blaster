@@ -1,5 +1,7 @@
 # logan_blaster: Blast a query against Logan data
 
+[![GitHub release](https://img.shields.io/github/v/release/pierrepeterlongo/blast_logan_search_results?label=version)](https://github.com/pierrepeterlongo/blast_logan_search_results/releases)
+
 Align genomic sequences with [Logan](https://github.com/IndexThePlanet/Logan/) contigs or unitigs.
 
 ## Two main modes
@@ -62,7 +64,9 @@ options:
   -s, --session SESSION
                         Logan session ID
   -a, --accessions ACCESSIONS
-                        Path to accessions.txt file
+                        Path to accessions.txt file or a .csv file 
+                        (containing a first header line, ignored, 
+                        and storing accessions as the first column)
   -q, --query QUERY     Path to query fasta file
   -u, --unitigs         Use unitigs instead of contigs
   -k, --kmer-size KMER_SIZE
@@ -85,6 +89,12 @@ This usage enables to select specific accessions to process, also ordering them,
 
 ```bash
 logan_blaster  -a example/accessions.txt -q example/query.fa
+```
+
+Note, the `-a` option also accepts .csv files directly downloaded from the logan-search interface
+
+```bash
+logan_blaster  -a my_data.csv -q example/query.fa
 ```
 
 ## Output
@@ -140,6 +150,26 @@ query   81  TTCCCTGGGCTCCGAAGGTCAGGGAGAAGGATATTGAGATGTTCCTTGAAAACAGTCGCAGCAAATTC
 In this case, except for the first three nucleotides, the full query was aligned to at least one contig. Some portions were aligned to two contigs (positions labeled 'b'), or three contigs (positions labeled 'c'), and so on.
 All positions aligned to more than 26 contigs are labeled 'Z'.
 
+
+## Versioning
+
+Versions follow [Semantic Versioning](https://semver.org/) and are driven by **git tags**.
+The version displayed by `logan_blaster --version` is derived automatically from the latest tag.
+
+### Creating a new release
+
+```bash
+# 1. Commit all changes
+git commit -am "Release vX.Y.Z"
+
+# 2. Create an annotated tag
+git tag -a vX.Y.Z -m "Release vX.Y.Z"
+
+# 3. Push the tag
+git push origin vX.Y.Z
+```
+
+The tag is the single source of truth — no need to edit the version manually anywhere in the code.
 
 ## Authors
 

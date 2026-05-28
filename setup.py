@@ -1,9 +1,10 @@
 from setuptools import setup
 import os
-import logan_blaster
+
 setup(name = 'logan_blaster',
-    version = logan_blaster.__version__,
-    author = logan_blaster.__author__,
+    use_scm_version=True,
+    setup_requires=['setuptools_scm'],
+    author = 'Pierre Peterlongo',
     py_modules=['logan_blaster'],
     python_requires='>=3.8',
     entry_points={
