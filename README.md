@@ -1,6 +1,6 @@
 # logan_blaster: Blast a query against Logan data
 
-[![GitHub release](https://img.shields.io/github/v/release/pierrepeterlongo/blast_logan_search_results?label=version)](https://github.com/pierrepeterlongo/blast_logan_search_results/releases)
+[![GitHub release](https://img.shields.io/github/v/tag/pierrepeterlongo/logan_blaster?label=version)](https://github.com/pierrepeterlongo/logan_blaster/releases)
 
 Align genomic sequences with [Logan](https://github.com/IndexThePlanet/Logan/) contigs or unitigs.
 
