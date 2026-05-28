@@ -10,19 +10,26 @@ import ssl
 
 __author__ = 'Pierre Peterlongo'
 
-try:
-    from importlib.metadata import version as _pkg_version, PackageNotFoundError
+def _resolve_version():
+    # Primary: read live from git tags — no extra dependency
     try:
-        __version__ = _pkg_version("logan_blaster")
-    except PackageNotFoundError:
-        # Not installed — try to derive version from git tags (direct repo use)
-        try:
-            from setuptools_scm import get_version as _get_scm_version
-            __version__ = _get_scm_version(root='.', relative_to=__file__)
-        except Exception:
-            __version__ = "0+unknown"
-except ImportError:
-    __version__ = "0+unknown"
+        result = subprocess.run(
+            ["git", "describe", "--tags", "--abbrev=0"],
+            capture_output=True, text=True, check=True,
+            cwd=os.path.dirname(os.path.abspath(__file__)) or ".",
+        )
+        return result.stdout.strip().lstrip("v")
+    except Exception:
+        pass
+    # Fallback: installed package metadata (pip install without a git repo)
+    try:
+        from importlib.metadata import version as _pkg_version
+        return _pkg_version("logan_blaster")
+    except Exception:
+        pass
+    return "0+unknown"
+
+__version__ = _resolve_version()
 
 # Message colors
 GREEN = "\033[0;32m"
