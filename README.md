@@ -10,7 +10,7 @@ Align genomic sequences with [Logan](https://github.com/IndexThePlanet/Logan/) c
 
 In any case, for each accession, `logan_blaster` 
 1. Downloads the Logan contigs,
-2. Recruits contigs that contain at least one shared k-mer (k=17 by default) with the query (uses `[back_to_sequences](https://github.com/pierrepeterlongo/back_to_sequences)`), 
+2. Recruits contigs that contain at least one shared k-mer (k=17 by default) with the query (uses [back_to_sequences](https://github.com/pierrepeterlongo/back_to_sequences)), 
 3. Runs a local blast between the query and this subset of contigs.
 4. Analyses the blast results: prints the portion(s) of the query matched by at least contig of the accession
 
@@ -19,18 +19,7 @@ In any case, for each accession, `logan_blaster`
 ### From conda / mamba
 
 ```bash
-# Clone logan_blaster repository
-git clone https://github.com/pierrepeterlongo/logan_blaster
-cd logan_blaster
-
-# Create the environment with dependencies
-mamba env create -f environment.yml
-
-# Activate the environment
-mamba activate logan_blaster
-
-# Install back_to_sequences (Rust tool) if not already installed
-cargo install back_to_sequences
+conda install -c conda-forge -c bioconda logan_blaster
 ```
 
 ### From sources
