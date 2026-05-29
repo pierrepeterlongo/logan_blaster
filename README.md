@@ -6,13 +6,13 @@ Align genomic sequences with [Logan](https://github.com/IndexThePlanet/Logan/) c
 
 ## Two main modes
 1. From a query and a list of Logan accessions.  
-2. From a [Logan-Search](https://logan-search.org/) session id. The query and Logan accessions are then automaticaly retreived.
+2. From a [Logan-Search](https://logan-search.org/) session id. The query and Logan accessions are then automatically retrieved.
 
 In any case, for each accession, `logan_blaster` 
 1. Downloads the Logan contigs,
 2. Recruits contigs that contain at least one shared k-mer (k=17 by default) with the query (uses [back_to_sequences](https://github.com/pierrepeterlongo/back_to_sequences)), 
 3. Runs a local blast between the query and this subset of contigs.
-4. Analyses the blast results: prints the portion(s) of the query matched by at least contig of the accession
+4. Analyses the blast results: prints the portion(s) of the query matched by at least one contig of the accession
 
 ## Install
 
@@ -42,7 +42,7 @@ python logan_blaster.py --help
 
 ## Usage
 
-```bash
+```
 logan_blaster -h
 usage: logan_blaster [-h] [-s SESSION] [-a ACCESSIONS] [-q QUERY] [-u] [-k KMER_SIZE] [-l LIMIT] [-d]
 
@@ -74,7 +74,7 @@ logan_blaster -s kmviz-b2bce461-ca13-4a45-b0b4-6c894eacf103
 
 ### Example running from accessions and query files.
 
-This usage enables to select specific accessions to process, also ordering them, and to provide any custom query file.
+This usage enables selecting specific accessions to process, also ordering them, and to provide any custom query file.
 
 ```bash
 logan_blaster  -a example/accessions.txt -q example/query.fa
@@ -91,7 +91,7 @@ logan_blaster  -a my_data.csv -q example/query.fa
 ### Created files and directories
 
 The program creates a directory named either with the session name (if run from a session id) or with the query file name (if run from accessions and query files).
-Here this the structure of this directory (here with two successful accessions on which the query was aligned):
+Here is the structure of this directory (here with two successful accessions on which the query was aligned):
 
 ```
 .
@@ -205,11 +205,6 @@ with contextlib.redirect_stdout(buf):
 open('tests/data/expected_self_synth.txt', 'w').write(buf.getvalue())
 "
 ```
-
-## Versioning
-
-Versions follow [Semantic Versioning](https://semver.org/) and are driven by **git tags**.
-The version displayed by `logan_blaster --version` is derived automatically from the latest tag.
 
 
 ## Authors
