@@ -10,9 +10,11 @@ Align genomic sequences with [Logan](https://github.com/IndexThePlanet/Logan/) c
 
 In any case, for each accession, `logan_blaster` 
 1. Downloads the Logan contigs,
-2. Recruits contigs that contain at least one shared k-mer (k=17 by default) with the query (uses `[back_to_sequences](https://github.com/pierrepeterlongo/back_to_sequences)`), 
-3. Runs a local blast between the query and this subset of contigs.
-4. Analyses the blast results: prints the portion(s) of the query matched by at least contig of the accession
+2. Computes coverage statistics (mean, median) of the downloaded contigs,
+3. Recruits contigs that contain at least one shared k-mer (k=17 by default) with the query (uses [`back_to_sequences`](https://github.com/pierrepeterlongo/back_to_sequences)),
+4. Computes coverage statistics (mean, median) of the recruited contigs,
+5. Runs a local blast between the query and this subset of contigs.
+6. Analyses the blast results: prints the portion(s) of the query matched by at least one contig of the accession
 
 ## Install
 
@@ -31,6 +33,9 @@ mamba activate logan_blaster
 
 # Install back_to_sequences (Rust tool) if not already installed
 cargo install back_to_sequences
+
+# Install count_tig_coverage (Rust tool)
+cargo install --git https://github.com/pierrepeterlongo/count_logan_tig_coverage
 ```
 
 ### From sources
@@ -40,6 +45,7 @@ cargo install back_to_sequences
 - blast: *on mac* `brew install blast` or look at [blast installation web page](https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/)
 - back_to_sequences: see back_to_sequences installation [web page](https://b2s-doc.readthedocs.io/en/latest/usage.html#installation])
 - jq: see [jq installation web page](https://jqlang.org/)
+- count_tig_coverage: `cargo install --git https://github.com/pierrepeterlongo/count_logan_tig_coverage`
 
 #### Clone the repository
 

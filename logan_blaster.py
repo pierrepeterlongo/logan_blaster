@@ -255,6 +255,18 @@ class LoganBlaster:
         self.accession_file = os.path.join(self.INPUT_DATA_DIR_NAME, f"{self.session_id}_acc.txt")
         self.query_file = os.path.join(self.INPUT_DATA_DIR_NAME, f"{self.session_id}_query.fa")
 
+    def _run_coverage_stats(self, fasta_file, label):
+        if shutil.which("count_logan_tig_coverage") is None:
+            return
+        print(f"{YELLOW}[INFO] Coverage statistics for {label}:{NOCOLOR}")
+        cmd = ["count_logan_tig_coverage", "--in", fasta_file]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"{YELLOW}[WARNING] count_logan_tig_coverage failed: {result.stderr.strip()}{NOCOLOR}")
+        else:
+            for line in result.stdout.splitlines():
+                print(f"  {line}")
+
     def _run_blast(self, query_fasta, target_fasta):
         query_basename = os.path.basename(query_fasta).split(".")[0]
         target_basename = os.path.basename(target_fasta).split(".")[0]
@@ -345,6 +357,8 @@ class LoganBlaster:
                 else:
                     print(f"{YELLOW}[INFO] Using existing local version of {local_file}...{NOCOLOR}")
 
+                self._run_coverage_stats(local_file, f"downloaded {self.type}s ({accession})")
+
                 recruited_file = os.path.join(self.LOGAN_DIR_NAME, f"{accession}.recruited_{self.type}s.fa")
                 print(f"{YELLOW}[INFO] Recruiting sequences from {accession}.{self.type}s.fa.zst with a match with {self.query_file}...{NOCOLOR}")
                 cmd_recruit = [
@@ -383,6 +397,8 @@ class LoganBlaster:
                         with open(self.failed_accession_list, "a") as f:
                             f.write(f"{accession}\n")
                     continue
+
+                self._run_coverage_stats(recruited_file, f"recruited {self.type}s ({accession})")
 
                 print(f"{YELLOW}[INFO] Aligning recruited sequences from {accession}.{self.type}s.fa.zst with {self.query_file}...{NOCOLOR}")
                 self._run_blast(self.query_file, recruited_file)
@@ -444,6 +460,9 @@ def main():
     if args.limit < 0:
         print(f"{RED}Error: Limit must be a non-negative integer.{NOCOLOR}")
         sys.exit(1)
+
+    if shutil.which("count_logan_tig_coverage") is None:
+        print(f"{YELLOW}[WARNING] 'count_logan_tig_coverage' not found — coverage statistics will be skipped.{NOCOLOR}")
 
     for cmd in ["back_to_sequences", "blastn", "jq"]:
         if shutil.which(cmd) is None:
