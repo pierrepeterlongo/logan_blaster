@@ -12,7 +12,7 @@ In any case, for each accession, `logan_blaster`
 1. Downloads the Logan contigs,
 2. Computes coverage statistics (mean, median) of the downloaded contigs,
 3. Recruits contigs that contain at least one shared k-mer (k=17 by default) with the query (uses [`back_to_sequences`](https://github.com/pierrepeterlongo/back_to_sequences)),
-4. Computes coverage statistics (mean, median) of the recruited contigs,
+4. Computes coverage statistics (mean, median) of the recruited contigs (uses [`count_logan_tig_coverage`](https://github.com/pierrepeterlongo/count_logan_tig_coverage)),
 5. Runs a local blast between the query and this subset of contigs.
 6. Analyses the blast results: prints the portion(s) of the query matched by at least one contig of the accession
 
