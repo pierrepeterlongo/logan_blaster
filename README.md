@@ -21,21 +21,8 @@ In any case, for each accession, `logan_blaster`
 ### From conda / mamba
 
 ```bash
-# Clone logan_blaster repository
-git clone https://github.com/pierrepeterlongo/logan_blaster
-cd logan_blaster
-
-# Create the environment with dependencies
-mamba env create -f environment.yml
-
-# Activate the environment
-mamba activate logan_blaster
-
-# Install back_to_sequences (Rust tool) if not already installed
-cargo install back_to_sequences
-
-# Install count_tig_coverage (Rust tool)
-cargo install --git https://github.com/pierrepeterlongo/count_logan_tig_coverage
+conda create -n logan_blaster -c conda-forge -c bioconda logan_blaster
+conda activate logan_blaster
 ```
 
 ### From sources
