@@ -25,14 +25,6 @@ conda create -n logan_blaster -c conda-forge -c bioconda logan_blaster
 conda activate logan_blaster
 ```
 
-**Note**, `logan_blaster` uses [count_logan_tig_coverage](https://github.com/pierrepeterlongo/count_logan_tig_coverage), not on bioconda yet. This is not mandatory, but it provides additional stats on the original and on the recruited sequences if installed. 
-
-Install: 
-
-```bash
-count_tig_coverage: `cargo install --git https://github.com/pierrepeterlongo/count_logan_tig_coverage`
-```
-
 ### From sources
 
 #### Requires 
