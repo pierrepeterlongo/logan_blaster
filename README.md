@@ -1,6 +1,7 @@
 # logan_blaster: Blast a query against Logan data
 
 [![GitHub release](https://img.shields.io/github/v/tag/pierrepeterlongo/logan_blaster?label=version)](https://github.com/pierrepeterlongo/logan_blaster/releases)
+[![install with bioconda](https://img.shields.io/badge/install%20with-bioconda-brightgreen.svg?style=flat)](http://bioconda.github.io/recipes/logan_blaster/README.html)
 
 Align genomic sequences with [Logan](https://github.com/IndexThePlanet/Logan/) contigs or unitigs.
 
