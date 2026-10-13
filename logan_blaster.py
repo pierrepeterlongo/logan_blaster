@@ -329,9 +329,9 @@ class LoganBlaster:
                     print(f"{YELLOW}[INFO] Downloading {accession}.{self.type}s.fa.zst...{NOCOLOR}")
                     if self.cli_installed:
                         if not self.unitigs:
-                            cmd_dl = f"aws s3 cp s3://logan-pub/c/{accession}/{accession}.contigs.fa.zst . --no-sign-request"
+                            cmd_dl = f"aws s3 cp s3://logan-pub/c/{accession}/{accession}.contigs.fa.zst . --no-sign-request --region us-east-1"
                         else:
-                            cmd_dl = f"aws s3 cp s3://logan-pub/u/{accession}/{accession}.unitigs.fa.zst . --no-sign-request"
+                            cmd_dl = f"aws s3 cp s3://logan-pub/u/{accession}/{accession}.unitigs.fa.zst . --no-sign-request --region us-east-1"
                     else:
                         if not self.unitigs:
                             cmd_dl = f"wget https://s3.amazonaws.com/logan-pub/c/{accession}/{accession}.contigs.fa.zst"
