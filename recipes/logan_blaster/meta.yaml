@@ -1,5 +1,5 @@
 {% set name = "logan_blaster" %}
-{% set version = "0.1.1" %}
+{% set version = "0.1.4" %}
 
 package:
   name: {{ name|lower }}
@@ -7,22 +7,26 @@ package:
 
 source:
   url: https://github.com/pierrepeterlongo/{{ name }}/archive/refs/tags/v{{ version }}.tar.gz
-  sha256: aecacb749ea44fa8ac88d887fb25e1144e412847d4b536cef992fce12dfa5944
+  sha256: 57e467638e80a75b91e74081ee0c4211ce823eb868e32934491f9c2832276b0f
 
 build:
   number: 0
   noarch: python
-  script: {{ PYTHON }} -m pip install . --no-deps --no-build-isolation -vv
-  run_exports:
-    - {{ pin_subpackage('logan_blaster', max_pin="x.x") }}
+  script:
+    - export SETUPTOOLS_SCM_PRETEND_VERSION={{ version }}
+    - {{ PYTHON }} -m pip install . --no-deps --no-build-isolation -vv
   entry_points:
     - logan_blaster = logan_blaster:main
+  run_exports:
+    - {{ pin_subpackage('logan_blaster', max_pin="x.x") }}
 
 requirements:
   host:
     - python >=3.8
     - pip
     - setuptools
+    - wheel
+    - setuptools-scm
   run:
     - python >=3.8
     - blast
@@ -30,7 +34,7 @@ requirements:
     - back_to_sequences
     - wget
     - count_logan_tig_coverage
-
+    
 test:
   commands:
     - logan_blaster --version
