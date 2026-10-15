@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 import os
 import sys
 import argparse
@@ -7,6 +8,9 @@ import shutil
 from urllib.request import urlopen
 from pathlib import Path
 import ssl
+import asyncio
+import threading
+import queue
 
 __author__ = 'Pierre Peterlongo'
 
@@ -178,6 +182,9 @@ class LoganBlaster:
         self.type = "unitig" if unitigs else "contig"
         self.failed_accession_list = ""
         self.cli_installed = shutil.which("aws") is not None
+        self.download_queue = queue.Queue()
+        self.download_thread = None
+        self.stopping = False
 
     def _setup_directories(self):
         if not self.main_dir_name:
@@ -267,6 +274,48 @@ class LoganBlaster:
             for line in result.stdout.splitlines():
                 print(f"  {line}")
 
+    def _download_worker(self, accessions, start_idx):
+        """Worker thread to download accessions[start_idx:] in background"""
+        for i in range(start_idx, len(accessions)):
+            if self.stopping:
+                break
+            accession = accessions[i].strip().split()[0]
+            if not accession:
+                continue
+            local_file = os.path.join(self.LOGAN_DIR_NAME, f"{accession}.{self.type}s.fa.zst")
+            if os.path.exists(local_file):
+                continue
+            try:
+                if self.cli_installed:
+                    if not self.unitigs:
+                        cmd_dl = f"aws s3 cp s3://logan-pub/c/{accession}/{accession}.contigs.fa.zst . --no-sign-request --region us-east-1"
+                    else:
+                        cmd_dl = f"aws s3 cp s3://logan-pub/u/{accession}/{accession}.unitigs.fa.zst . --no-sign-request --region us-east-1"
+                else:
+                    if not self.unitigs:
+                        cmd_dl = f"wget https://s3.amazonaws.com/logan-pub/c/{accession}/{accession}.contigs.fa.zst"
+                    else:
+                        cmd_dl = f"wget https://s3.amazonaws.com/logan-pub/u/{accession}/{accession}.unitigs.fa.zst"
+
+                for attempt in range(3):
+                    try:
+                        subprocess.run(cmd_dl, shell=True, check=True, 
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        break
+                    except subprocess.CalledProcessError:
+                        pass
+                else:
+                    self.download_queue.put((accession, False))
+                    continue
+                
+                if os.path.exists(f"{accession}.{self.type}s.fa.zst"):
+                    shutil.move(f"{accession}.{self.type}s.fa.zst", self.LOGAN_DIR_NAME)
+                    self.download_queue.put((accession, True))
+                else:
+                    self.download_queue.put((accession, False))
+            except Exception:
+                self.download_queue.put((accession, False))
+
     def _run_blast(self, query_fasta, target_fasta):
         query_basename = os.path.basename(query_fasta).split(".")[0]
         target_basename = os.path.basename(target_fasta).split(".")[0]
@@ -308,24 +357,54 @@ class LoganBlaster:
             sys.stdout = sys.__stdout__
 
     def _process_accessions(self):
-        counter = 0
-
         with open(self.accession_file, "r") as f:
-            for accession in f:
-                accession = accession.strip().split()[0]
+            accessions = [line for line in f if line.strip()]
 
-                if self.limit != 0 and counter >= self.limit:
-                    print(f"\n{YELLOW}[INFO] Reached limit of {self.limit} accessions. Stopping further processing.{NOCOLOR}")
-                    break
-                counter += 1
+        counter = 0
+        total = len(accessions)
+        if self.limit != 0:
+            total = min(total, self.limit)
 
-                print(f"\n{BLUE}=========================================={NOCOLOR}")
-                print(f"{CYAN}>>> Processing accession: {accession} <<<{NOCOLOR}")
-                print(f"{BLUE}=========================================={NOCOLOR}")
+        for idx in range(total):
+            if self.stopping:
+                break
+            accession = accessions[idx].strip().split()[0]
+            if not accession:
+                continue
 
-                local_file = os.path.join(self.LOGAN_DIR_NAME, f"{accession}.{self.type}s.fa.zst")
-                print(f"{YELLOW}[INFO] Checking for local file {local_file}...{NOCOLOR}")
-                if not os.path.exists(local_file):
+            if self.limit != 0 and counter >= self.limit:
+                print(f"\n{YELLOW}[INFO] Reached limit of {self.limit} accessions. Stopping further processing.{NOCOLOR}")
+                break
+            counter += 1
+
+            print(f"\n{BLUE}=========================================={NOCOLOR}")
+            print(f"{CYAN}>>> Processing accession: {accession} <<<{NOCOLOR}")
+            print(f"{BLUE}=========================================={NOCOLOR}")
+
+            local_file = os.path.join(self.LOGAN_DIR_NAME, f"{accession}.{self.type}s.fa.zst")
+
+            if idx + 1 < total and not os.path.exists(local_file):
+                next_accession = accessions[idx + 1].strip().split()[0]
+                if next_accession and not os.path.exists(os.path.join(self.LOGAN_DIR_NAME, f"{next_accession}.{self.type}s.fa.zst")):
+                    print(f"{YELLOW}[INFO] Starting background download for next accession: {next_accession}{NOCOLOR}")
+                    self.download_thread = threading.Thread(
+                        target=self._download_worker,
+                        args=(accessions, idx + 1),
+                        daemon=True
+                    )
+                    self.download_thread.start()
+
+            if not os.path.exists(local_file):
+                print(f"{YELLOW}[INFO] Checking download queue for {accession}...{NOCOLOR}")
+                downloaded = False
+                while not self.download_queue.empty():
+                    dq_accession, dq_success = self.download_queue.get()
+                    if dq_accession == accession:
+                        downloaded = dq_success
+                        break
+                    self.download_queue.put((dq_accession, dq_success))
+
+                if not downloaded:
                     print(f"{YELLOW}[INFO] Downloading {accession}.{self.type}s.fa.zst...{NOCOLOR}")
                     if self.cli_installed:
                         if not self.unitigs:
@@ -354,55 +433,38 @@ class LoganBlaster:
                                 f.write(f"{accession}\n")
                         continue
                     shutil.move(f"{accession}.{self.type}s.fa.zst", self.LOGAN_DIR_NAME)
-                else:
-                    print(f"{YELLOW}[INFO] Using existing local version of {local_file}...{NOCOLOR}")
+            else:
+                print(f"{YELLOW}[INFO] Using existing local version of {local_file}...{NOCOLOR}")
 
-                self._run_coverage_stats(local_file, f"downloaded {self.type}s ({accession})")
+            self._run_coverage_stats(local_file, f"downloaded {self.type}s ({accession})")
 
-                recruited_file = os.path.join(self.LOGAN_DIR_NAME, f"{accession}.recruited_{self.type}s.fa")
-                print(f"{YELLOW}[INFO] Recruiting sequences from {accession}.{self.type}s.fa.zst with a match with {self.query_file}...{NOCOLOR}")
-                cmd_recruit = [
-                    "back_to_sequences",
-                    "--kmer-size", str(self.kmer_size),
-                    "--in-kmers", self.query_file,
-                    "--in-sequences", local_file,
-                    "--out-sequences", recruited_file
-                ]
-                print(f"{GREEN}Running command: {' '.join(cmd_recruit)}{NOCOLOR}")
+            recruited_file = os.path.join(self.LOGAN_DIR_NAME, f"{accession}.recruited_{self.type}s.fa")
+            print(f"{YELLOW}[INFO] Recruiting sequences from {accession}.{self.type}s.fa.zst with a match with {self.query_file}...{NOCOLOR}")
+            cmd_recruit = [
+                "back_to_sequences",
+                "--kmer-size", str(self.kmer_size),
+                "--in-kmers", self.query_file,
+                "--in-sequences", local_file,
+                "--out-sequences", recruited_file
+            ]
+            print(f"{GREEN}Running command: {' '.join(cmd_recruit)}{NOCOLOR}")
+            try:
+                subprocess.run(cmd_recruit, check=True, stdout=subprocess.DEVNULL, stderr=open("error.log", "w"))
+            except subprocess.CalledProcessError:
+                print(f"{RED}Error: back_to_sequences failed for accession {accession}.{NOCOLOR}")
                 try:
-                    subprocess.run(cmd_recruit, check=True, stdout=subprocess.DEVNULL, stderr=open("error.log", "w"))
-                except subprocess.CalledProcessError:
-                    print(f"{RED}Error: back_to_sequences failed for accession {accession}.{NOCOLOR}")
-                    try:
-                        os.remove(recruited_file)
-                        os.remove(local_file)
-                    except FileNotFoundError:
-                        pass
-                    with open("error.log", "r") as f:
-                        print(f.read())
-                    with open(self.failed_accession_list, "a") as f:
-                        f.write(f"{accession}\n")
-                    continue
+                    os.remove(recruited_file)
+                    os.remove(local_file)
+                except FileNotFoundError:
+                    pass
+                with open("error.log", "r") as f:
+                    print(f.read())
+                with open(self.failed_accession_list, "a") as f:
+                    f.write(f"{accession}\n")
+                continue
 
-                if os.path.getsize(recruited_file) == 0:
-                    print(f"{YELLOW}[INFO]\tNo sequences were recruited from {accession}.{self.type}s.fa.zst. Skipping BLAST step.{NOCOLOR}")
-                    if self.delete:
-                        print(f"{YELLOW}[INFO] Deleting {recruited_file} and {local_file}...{NOCOLOR}")
-                        try:
-                            os.remove(recruited_file)
-                            os.remove(local_file)
-                        except FileNotFoundError:
-                            pass
-                    if self.type == "contig":
-                        with open(self.failed_accession_list, "a") as f:
-                            f.write(f"{accession}\n")
-                    continue
-
-                self._run_coverage_stats(recruited_file, f"recruited {self.type}s ({accession})")
-
-                print(f"{YELLOW}[INFO] Aligning recruited sequences from {accession}.{self.type}s.fa.zst with {self.query_file}...{NOCOLOR}")
-                self._run_blast(self.query_file, recruited_file)
-
+            if os.path.getsize(recruited_file) == 0:
+                print(f"{YELLOW}[INFO]\tNo sequences were recruited from {accession}.{self.type}s.fa.zst. Skipping BLAST step.{NOCOLOR}")
                 if self.delete:
                     print(f"{YELLOW}[INFO] Deleting {recruited_file} and {local_file}...{NOCOLOR}")
                     try:
@@ -410,6 +472,27 @@ class LoganBlaster:
                         os.remove(local_file)
                     except FileNotFoundError:
                         pass
+                if self.type == "contig":
+                    with open(self.failed_accession_list, "a") as f:
+                        f.write(f"{accession}\n")
+                continue
+
+            self._run_coverage_stats(recruited_file, f"recruited {self.type}s ({accession})")
+
+            print(f"{YELLOW}[INFO] Aligning recruited sequences from {accession}.{self.type}s.fa.zst with {self.query_file}...{NOCOLOR}")
+            self._run_blast(self.query_file, recruited_file)
+
+            if self.delete:
+                print(f"{YELLOW}[INFO] Deleting {recruited_file} and {local_file}...{NOCOLOR}")
+                try:
+                    os.remove(recruited_file)
+                    os.remove(local_file)
+                except FileNotFoundError:
+                    pass
+
+        if self.download_thread:
+            self.stopping = True
+            self.download_thread.join(timeout=5)
 
     def run(self, abs_query_file=None, abs_accession_file=None):
         self._setup_directories()
