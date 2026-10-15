@@ -7,6 +7,7 @@ import shutil
 from urllib.request import urlopen
 from pathlib import Path
 import ssl
+from concurrent.futures import ThreadPoolExecutor
 
 __author__ = 'Pierre Peterlongo'
 
@@ -165,6 +166,7 @@ class LoganBlaster:
     LOGAN_DIR_NAME = "logan_data"
     ALIGNEMENT_DIR_NAME = "alignments"
     INPUT_DATA_DIR_NAME = "input_data"
+    PREFETCH = 2  # number of accessions downloaded in advance
 
     def __init__(self, session_id, accession_file, query_file, delete, unitigs, kmer_size, limit, output_dir):
         self.session_id = session_id
@@ -178,6 +180,7 @@ class LoganBlaster:
         self.type = "unitig" if unitigs else "contig"
         self.failed_accession_list = ""
         self.cli_installed = shutil.which("aws") is not None
+        self.stopping = False
 
     def _setup_directories(self):
         if not self.main_dir_name:
@@ -267,6 +270,45 @@ class LoganBlaster:
             for line in result.stdout.splitlines():
                 print(f"  {line}")
 
+    def _download_command(self, accession, destination):
+        prefix = "c" if not self.unitigs else "u"
+        file_name = f"{accession}.{self.type}s.fa.zst"
+        if self.cli_installed:
+            return ["aws", "s3", "cp", f"s3://logan-pub/{prefix}/{accession}/{file_name}", destination,
+                    "--no-sign-request", "--region", "us-east-1", "--only-show-errors"]
+        return ["wget", "--quiet", "-O", destination, f"https://s3.amazonaws.com/logan-pub/{prefix}/{accession}/{file_name}"]
+
+    def _fetch_accession(self, accession):
+        """Download the Logan file of an accession into LOGAN_DIR_NAME (runs in a worker thread).
+
+        The file is first written to a '.part' file then atomically renamed, so the final path
+        exists only when the download is complete. Never prints: sys.stdout may be redirected
+        by the main thread (see _run_blast). Returns (status, messages) with status in
+        {"existing", "downloaded", "failed"}.
+        """
+        local_file = os.path.join(self.LOGAN_DIR_NAME, f"{accession}.{self.type}s.fa.zst")
+        if os.path.exists(local_file):
+            return "existing", []
+
+        part_file = f"{local_file}.part"
+        cmd_dl = self._download_command(accession, part_file)
+        messages = [f"{GREEN}Running command: {' '.join(cmd_dl)}{NOCOLOR}"]
+        for attempt in range(3):
+            if self.stopping:
+                break
+            result = subprocess.run(cmd_dl, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+            if result.returncode == 0 and os.path.exists(part_file):
+                os.replace(part_file, local_file)
+                return "downloaded", messages
+            messages.append(f"{YELLOW}[WARNING] Attempt {attempt + 1} download failed for {accession}.{self.type}s.fa.zst. "
+                            f"{result.stderr.strip()}{NOCOLOR}")
+
+        try:
+            os.remove(part_file)
+        except FileNotFoundError:
+            pass
+        return "failed", messages
+
     def _run_blast(self, query_fasta, target_fasta):
         query_basename = os.path.basename(query_fasta).split(".")[0]
         target_basename = os.path.basename(target_fasta).split(".")[0]
@@ -307,109 +349,117 @@ class LoganBlaster:
             run_blast_parser(self.query_file, blastn_file, abundance=True)
             sys.stdout = sys.__stdout__
 
-    def _process_accessions(self):
-        counter = 0
-
+    def _read_accessions(self):
+        accessions = []
+        seen = set()
         with open(self.accession_file, "r") as f:
-            for accession in f:
-                accession = accession.strip().split()[0]
+            for line in f:
+                if not line.strip():
+                    continue
+                accession = line.strip().split()[0]
+                if accession in seen:
+                    print(f"{YELLOW}[WARNING] Duplicated accession {accession} ignored.{NOCOLOR}")
+                    continue
+                seen.add(accession)
+                accessions.append(accession)
+        if self.limit != 0:
+            accessions = accessions[:self.limit]
+        return accessions
 
-                if self.limit != 0 and counter >= self.limit:
-                    print(f"\n{YELLOW}[INFO] Reached limit of {self.limit} accessions. Stopping further processing.{NOCOLOR}")
-                    break
-                counter += 1
+    def _process_accessions(self):
+        accessions = self._read_accessions()
+        futures = {}
+        executor = ThreadPoolExecutor(max_workers=self.PREFETCH)
+        try:
+            for idx, accession in enumerate(accessions):
+                # Keep the current accession and the next PREFETCH ones scheduled for download
+                for next_idx in range(idx, min(idx + 1 + self.PREFETCH, len(accessions))):
+                    if next_idx not in futures:
+                        futures[next_idx] = executor.submit(self._fetch_accession, accessions[next_idx])
+                self._process_accession(accession, futures.pop(idx))
+        finally:
+            self.stopping = True
+            for future in futures.values():
+                future.cancel()
+            executor.shutdown(wait=True)
 
-                print(f"\n{BLUE}=========================================={NOCOLOR}")
-                print(f"{CYAN}>>> Processing accession: {accession} <<<{NOCOLOR}")
-                print(f"{BLUE}=========================================={NOCOLOR}")
+    def _process_accession(self, accession, download_future):
+        print(f"\n{BLUE}=========================================={NOCOLOR}")
+        print(f"{CYAN}>>> Processing accession: {accession} <<<{NOCOLOR}")
+        print(f"{BLUE}=========================================={NOCOLOR}")
 
-                local_file = os.path.join(self.LOGAN_DIR_NAME, f"{accession}.{self.type}s.fa.zst")
-                print(f"{YELLOW}[INFO] Checking for local file {local_file}...{NOCOLOR}")
-                if not os.path.exists(local_file):
-                    print(f"{YELLOW}[INFO] Downloading {accession}.{self.type}s.fa.zst...{NOCOLOR}")
-                    if self.cli_installed:
-                        if not self.unitigs:
-                            cmd_dl = f"aws s3 cp s3://logan-pub/c/{accession}/{accession}.contigs.fa.zst . --no-sign-request --region us-east-1"
-                        else:
-                            cmd_dl = f"aws s3 cp s3://logan-pub/u/{accession}/{accession}.unitigs.fa.zst . --no-sign-request --region us-east-1"
-                    else:
-                        if not self.unitigs:
-                            cmd_dl = f"wget https://s3.amazonaws.com/logan-pub/c/{accession}/{accession}.contigs.fa.zst"
-                        else:
-                            cmd_dl = f"wget https://s3.amazonaws.com/logan-pub/u/{accession}/{accession}.unitigs.fa.zst"
+        local_file = os.path.join(self.LOGAN_DIR_NAME, f"{accession}.{self.type}s.fa.zst")
+        if not download_future.done():
+            print(f"{YELLOW}[INFO] Waiting for download of {accession}.{self.type}s.fa.zst...{NOCOLOR}")
+        status, messages = download_future.result()
+        for message in messages:
+            print(message)
 
-                    print(f"{GREEN}Running command: {cmd_dl}{NOCOLOR}")
-                    for attempt in range(3):
-                        try:
-                            subprocess.run(cmd_dl, shell=True, check=True)
-                            break
-                        except subprocess.CalledProcessError:
-                            print(f"{YELLOW}[WARNING] Attempt {attempt + 1} download failed for {accession}.{self.type}s.fa.zst. {NOCOLOR}")
+        if status == "existing":
+            print(f"{YELLOW}[INFO] Using existing local version of {local_file}...{NOCOLOR}")
+        elif status == "downloaded":
+            print(f"{YELLOW}[INFO] Downloaded {local_file}{NOCOLOR}")
+        else:
+            print(f"{RED}Error: Failed to download {accession}.{self.type}s.fa.zst after 3 attempts.{NOCOLOR}")
+            if not self.unitigs:
+                print(f"{YELLOW}[INFO] Contigs do not exist for accession {accession}. Adding {accession} to failed accession list.{NOCOLOR}")
+                with open(self.failed_accession_list, "a") as f:
+                    f.write(f"{accession}\n")
+            return
 
-                    if not os.path.exists(f"{accession}.{self.type}s.fa.zst"):
-                        print(f"{RED}Error: Failed to download {accession}.{self.type}s.fa.zst after 3 attempts.{NOCOLOR}")
-                        if not self.unitigs:
-                            print(f"{YELLOW}[INFO] Contigs do not exist for accession {accession}. Adding {accession} to failed accession list.{NOCOLOR}")
-                            with open(self.failed_accession_list, "a") as f:
-                                f.write(f"{accession}\n")
-                        continue
-                    shutil.move(f"{accession}.{self.type}s.fa.zst", self.LOGAN_DIR_NAME)
-                else:
-                    print(f"{YELLOW}[INFO] Using existing local version of {local_file}...{NOCOLOR}")
+        self._run_coverage_stats(local_file, f"downloaded {self.type}s ({accession})")
 
-                self._run_coverage_stats(local_file, f"downloaded {self.type}s ({accession})")
+        recruited_file = os.path.join(self.LOGAN_DIR_NAME, f"{accession}.recruited_{self.type}s.fa")
+        print(f"{YELLOW}[INFO] Recruiting sequences from {accession}.{self.type}s.fa.zst with a match with {self.query_file}...{NOCOLOR}")
+        cmd_recruit = [
+            "back_to_sequences",
+            "--kmer-size", str(self.kmer_size),
+            "--in-kmers", self.query_file,
+            "--in-sequences", local_file,
+            "--out-sequences", recruited_file
+        ]
+        print(f"{GREEN}Running command: {' '.join(cmd_recruit)}{NOCOLOR}")
+        try:
+            subprocess.run(cmd_recruit, check=True, stdout=subprocess.DEVNULL, stderr=open("error.log", "w"))
+        except subprocess.CalledProcessError:
+            print(f"{RED}Error: back_to_sequences failed for accession {accession}.{NOCOLOR}")
+            try:
+                os.remove(recruited_file)
+                os.remove(local_file)
+            except FileNotFoundError:
+                pass
+            with open("error.log", "r") as f:
+                print(f.read())
+            with open(self.failed_accession_list, "a") as f:
+                f.write(f"{accession}\n")
+            return
 
-                recruited_file = os.path.join(self.LOGAN_DIR_NAME, f"{accession}.recruited_{self.type}s.fa")
-                print(f"{YELLOW}[INFO] Recruiting sequences from {accession}.{self.type}s.fa.zst with a match with {self.query_file}...{NOCOLOR}")
-                cmd_recruit = [
-                    "back_to_sequences",
-                    "--kmer-size", str(self.kmer_size),
-                    "--in-kmers", self.query_file,
-                    "--in-sequences", local_file,
-                    "--out-sequences", recruited_file
-                ]
-                print(f"{GREEN}Running command: {' '.join(cmd_recruit)}{NOCOLOR}")
+        if os.path.getsize(recruited_file) == 0:
+            print(f"{YELLOW}[INFO]\tNo sequences were recruited from {accession}.{self.type}s.fa.zst. Skipping BLAST step.{NOCOLOR}")
+            if self.delete:
+                print(f"{YELLOW}[INFO] Deleting {recruited_file} and {local_file}...{NOCOLOR}")
                 try:
-                    subprocess.run(cmd_recruit, check=True, stdout=subprocess.DEVNULL, stderr=open("error.log", "w"))
-                except subprocess.CalledProcessError:
-                    print(f"{RED}Error: back_to_sequences failed for accession {accession}.{NOCOLOR}")
-                    try:
-                        os.remove(recruited_file)
-                        os.remove(local_file)
-                    except FileNotFoundError:
-                        pass
-                    with open("error.log", "r") as f:
-                        print(f.read())
-                    with open(self.failed_accession_list, "a") as f:
-                        f.write(f"{accession}\n")
-                    continue
+                    os.remove(recruited_file)
+                    os.remove(local_file)
+                except FileNotFoundError:
+                    pass
+            if self.type == "contig":
+                with open(self.failed_accession_list, "a") as f:
+                    f.write(f"{accession}\n")
+            return
 
-                if os.path.getsize(recruited_file) == 0:
-                    print(f"{YELLOW}[INFO]\tNo sequences were recruited from {accession}.{self.type}s.fa.zst. Skipping BLAST step.{NOCOLOR}")
-                    if self.delete:
-                        print(f"{YELLOW}[INFO] Deleting {recruited_file} and {local_file}...{NOCOLOR}")
-                        try:
-                            os.remove(recruited_file)
-                            os.remove(local_file)
-                        except FileNotFoundError:
-                            pass
-                    if self.type == "contig":
-                        with open(self.failed_accession_list, "a") as f:
-                            f.write(f"{accession}\n")
-                    continue
+        self._run_coverage_stats(recruited_file, f"recruited {self.type}s ({accession})")
 
-                self._run_coverage_stats(recruited_file, f"recruited {self.type}s ({accession})")
+        print(f"{YELLOW}[INFO] Aligning recruited sequences from {accession}.{self.type}s.fa.zst with {self.query_file}...{NOCOLOR}")
+        self._run_blast(self.query_file, recruited_file)
 
-                print(f"{YELLOW}[INFO] Aligning recruited sequences from {accession}.{self.type}s.fa.zst with {self.query_file}...{NOCOLOR}")
-                self._run_blast(self.query_file, recruited_file)
-
-                if self.delete:
-                    print(f"{YELLOW}[INFO] Deleting {recruited_file} and {local_file}...{NOCOLOR}")
-                    try:
-                        os.remove(recruited_file)
-                        os.remove(local_file)
-                    except FileNotFoundError:
-                        pass
+        if self.delete:
+            print(f"{YELLOW}[INFO] Deleting {recruited_file} and {local_file}...{NOCOLOR}")
+            try:
+                os.remove(recruited_file)
+                os.remove(local_file)
+            except FileNotFoundError:
+                pass
 
     def run(self, abs_query_file=None, abs_accession_file=None):
         self._setup_directories()
