@@ -85,18 +85,12 @@ This usage enables to select specific accessions to process, also ordering them,
 logan_blaster  -a example/accessions.txt -q example/query.fa
 ```
 
-Note, the `-a` option also accepts .csv files directly downloaded from the logan-search interface
-
-```bash
-logan_blaster  -a my_data.csv -q example/query.fa
-```
-
 ## Output
 
 ### Created files and directories
 
 The program creates a directory named either with the session name (if run from a session id) or with the query file name (if run from accessions and query files).
-Here this the structure of this directory (here with two successful accessions on which the query was aligned):
+Here is the structure of this directory (here with two successful accessions on which the query was aligned):
 
 ```
 .
