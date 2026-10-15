@@ -383,16 +383,14 @@ class LoganBlaster:
 
             local_file = os.path.join(self.LOGAN_DIR_NAME, f"{accession}.{self.type}s.fa.zst")
 
-            if idx + 1 < total and not os.path.exists(local_file):
-                next_accession = accessions[idx + 1].strip().split()[0]
-                if next_accession and not os.path.exists(os.path.join(self.LOGAN_DIR_NAME, f"{next_accession}.{self.type}s.fa.zst")):
-                    print(f"{YELLOW}[INFO] Starting background download for next accession: {next_accession}{NOCOLOR}")
-                    self.download_thread = threading.Thread(
-                        target=self._download_worker,
-                        args=(accessions, idx + 1),
-                        daemon=True
-                    )
-                    self.download_thread.start()
+            if idx + 2 < total:
+                print(f"{YELLOW}[INFO] Starting background downloads for next 2 accessions{NOCOLOR}")
+                self.download_thread = threading.Thread(
+                    target=self._download_worker,
+                    args=(accessions, idx + 1),
+                    daemon=True
+                )
+                self.download_thread.start()
 
             if not os.path.exists(local_file):
                 print(f"{YELLOW}[INFO] Checking download queue for {accession}...{NOCOLOR}")
