@@ -7,7 +7,8 @@ Align genomic sequences with [Logan](https://github.com/IndexThePlanet/Logan/) c
 
 ## Two main modes
 1. From a query and a list of Logan accessions.  
-2. From a [Logan-Search](https://logan-search.org/) session id. The query and Logan accessions are then automaticaly retreived.
+2. From a [Logan Search](https://logan.dev.brc-analytics.org/) job id (*e.g.* `2f780abfeae3f54e`, as in `https://logan.dev.brc-analytics.org/results?job=2f780abfeae3f54e`). The Logan accessions are automatically retrieved from the parquet export of the job (requires [pyarrow](https://arrow.apache.org/docs/python/)). The API does not provide the query sequence, so it must be given with `-q`.
+3. From a legacy [logan-search.org](https://logan-search.org/) session id (`kmviz-...`). The query and Logan accessions are then automatically retrieved.
 
 In any case, for each accession, `logan_blaster` 
 1. Downloads the Logan contigs,
@@ -49,29 +50,42 @@ python logan_blaster.py --help
 
 ```bash
 logan_blaster -h
-usage: logan_blaster [-h] [-s SESSION] [-a ACCESSIONS] [-q QUERY] [-u] [-k KMER_SIZE] [-l LIMIT] [-d]
+usage: logan_blaster [-h] [-s SESSION] [-a ACCESSIONS] [-q QUERY] [-o OUTPUT] [-u] [-k KMER_SIZE] [-l LIMIT] [--api-url API_URL] [-d] [--version]
 
 Process Logan session or accession/query files.
 
 options:
   -h, --help            show this help message and exit
   -s, --session SESSION
-                        Logan session ID
+                        Logan Search job ID (e.g. 2f780abfeae3f54e, requires --query)
+                        or legacy logan-search.org session ID (kmviz-...)
   -a, --accessions ACCESSIONS
-                        Path to accessions.txt file or a .csv file 
+                        Path to accessions.txt file, or a .csv file 
                         (containing a first header line, ignored, 
-                        and storing accessions as the first column)
+                        and storing accessions as the first column),
+                        or a .parquet / .tsv file exported from Logan Search
   -q, --query QUERY     Path to query fasta file
   -u, --unitigs         Use unitigs instead of contigs
   -k, --kmer-size KMER_SIZE
                         K-mer size for sequence recruitment
   -l, --limit LIMIT     Limit number of accessions to process
+  --api-url API_URL     Logan Search API base URL, used with a Logan Search job ID
+                        (default: https://logan.dev.brc-analytics.org/api/v1)
   -d, --delete          Delete intermediate files after processing
 ```
 
 ## Examples
 
-### Example running from session.
+### Example running from a Logan Search job id.
+
+```bash
+logan_blaster -s 2f780abfeae3f54e -q my_query.fa -l 10
+```
+
+Accessions are processed in the order of the export (decreasing score). Jobs may return tens of thousands of accessions: use `-l` to limit their number.
+The parquet export (with SRA metadata) is kept in `input_data/<job_id>.parquet`.
+
+### Example running from a legacy session.
 
 ```bash
 logan_blaster -s kmviz-b2bce461-ca13-4a45-b0b4-6c894eacf103

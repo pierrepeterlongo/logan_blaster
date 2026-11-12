@@ -7,6 +7,7 @@ import shutil
 from urllib.request import urlopen
 from pathlib import Path
 import ssl
+import json
 from concurrent.futures import ThreadPoolExecutor
 
 __author__ = 'Pierre Peterlongo'
@@ -162,14 +163,79 @@ def download_file(url, destination):
         sys.exit(1)
 
 
+# Logan Search (kmindex jobs served through Galaxy at TACC / BRC Analytics)
+DEFAULT_LOGAN_SEARCH_API = "https://logan.dev.brc-analytics.org/api/v1"
+KMVIZ_SESSION_PREFIX = "kmviz-"
+
+
+def is_kmviz_session(session_id):
+    """True for legacy logan-search.org sessions (kmviz-...), False for new Logan Search job IDs."""
+    return session_id.startswith(KMVIZ_SESSION_PREFIX)
+
+
+def extract_accessions_from_tsv(tsv_file, output_file):
+    """Write the accessions of a Logan Search TSV export (one per line) into output_file.
+
+    The accession column is located by its header name ('accession'); if no such header
+    exists, the first column is used and the first line is considered as a header.
+    Returns the number of written accessions.
+    """
+    nb_accessions = 0
+    with open(tsv_file, "r") as fin, open(output_file, "w") as fout:
+        header = fin.readline().rstrip("\n").split("\t")
+        column = header.index("accession") if "accession" in header else 0
+        for line in fin:
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) <= column or not fields[column].strip():
+                continue
+            fout.write(f"{fields[column].strip()}\n")
+            nb_accessions += 1
+    return nb_accessions
+
+
+def extract_accessions_from_parquet(parquet_file, output_file):
+    """Write the accessions of a Logan Search parquet export (one per line) into output_file.
+
+    Only the 'accession' column is read. Requires pyarrow.
+    Returns the number of written accessions.
+    """
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        print(f"{RED}Error: reading Logan Search parquet exports requires pyarrow "
+              f"(pip install pyarrow, or conda install -c conda-forge pyarrow).{NOCOLOR}")
+        sys.exit(1)
+    nb_accessions = 0
+    parquet = pq.ParquetFile(parquet_file)
+    with open(output_file, "w") as fout:
+        for batch in parquet.iter_batches(columns=["accession"]):
+            for accession in batch.column(0).to_pylist():
+                if accession and accession.strip():
+                    fout.write(f"{accession.strip()}\n")
+                    nb_accessions += 1
+    return nb_accessions
+
+
+def fetch_json(url):
+    """Return the decoded JSON content of url, or None on failure."""
+    try:
+        context = ssl._create_unverified_context()
+        with urlopen(url, context=context) as response:
+            return json.load(response)
+    except Exception:
+        return None
+
+
 class LoganBlaster:
     LOGAN_DIR_NAME = "logan_data"
     ALIGNEMENT_DIR_NAME = "alignments"
     INPUT_DATA_DIR_NAME = "input_data"
     PREFETCH = 2  # number of accessions downloaded in advance
 
-    def __init__(self, session_id, accession_file, query_file, delete, unitigs, kmer_size, limit, output_dir):
+    def __init__(self, session_id, accession_file, query_file, delete, unitigs, kmer_size, limit, output_dir,
+                 api_url=DEFAULT_LOGAN_SEARCH_API):
         self.session_id = session_id
+        self.api_url = api_url.rstrip("/")
         self.accession_file = accession_file
         self.query_file = query_file
         self.delete = delete
@@ -216,7 +282,17 @@ class LoganBlaster:
         self.query_file = os.path.join(self.INPUT_DATA_DIR_NAME, os.path.basename(abs_query_file))
         self.accession_file = os.path.join(self.INPUT_DATA_DIR_NAME, os.path.basename(abs_accession_file))
 
-        if self.accession_file.endswith(".csv"):
+        if self.accession_file.endswith(".parquet"):
+            accession_basename = self.accession_file[:-len(".parquet")]
+            print(f"{YELLOW}[INFO] Extracting accession IDs from {accession_basename}.parquet...{NOCOLOR}")
+            extract_accessions_from_parquet(self.accession_file, f"{accession_basename}_acc.txt")
+            self.accession_file = f"{accession_basename}_acc.txt"
+        elif self.accession_file.endswith(".tsv"):
+            accession_basename = self.accession_file[:-len(".tsv")]
+            print(f"{YELLOW}[INFO] Extracting accession IDs from {accession_basename}.tsv...{NOCOLOR}")
+            extract_accessions_from_tsv(self.accession_file, f"{accession_basename}_acc.txt")
+            self.accession_file = f"{accession_basename}_acc.txt"
+        elif self.accession_file.endswith(".csv"):
             accession_basename = self.accession_file.rstrip(".csv")
             print(f"{YELLOW}[INFO] Extracting accession IDs from {accession_basename}.csv...{NOCOLOR}")
             cmd_jq_acc = f"cat {accession_basename}.csv | tail -n +2 | cut -f 1 > {accession_basename}_acc.txt"
@@ -225,7 +301,50 @@ class LoganBlaster:
                 self.INPUT_DATA_DIR_NAME, os.path.basename(f"{accession_basename}_acc.txt")
             )
 
-    def _setup_session(self):
+    def _setup_session(self, abs_query_file=None):
+        if is_kmviz_session(self.session_id):
+            self._setup_kmviz_session()
+        else:
+            self._setup_search_job(abs_query_file)
+
+    def _setup_search_job(self, abs_query_file):
+        """Retrieve the accessions of a Logan Search job (parquet export) and copy the user query.
+
+        The Logan Search API does not expose the query sequence, only its name:
+        the query fasta file has to be provided by the user (-q).
+        """
+        job_url = f"{self.api_url}/galaxy/kmindex/jobs/{self.session_id}"
+        os.makedirs(self.INPUT_DATA_DIR_NAME, exist_ok=True)
+        os.chdir(self.INPUT_DATA_DIR_NAME)
+
+        parquet_file = f"{self.session_id}.parquet"
+        if not os.path.exists(parquet_file):
+            print(f"{YELLOW}[INFO] Downloading Logan Search results for job {self.session_id}...{NOCOLOR}")
+            download_file(f"{job_url}/export?format=parquet", f"{parquet_file}.part")
+            os.replace(f"{parquet_file}.part", parquet_file)
+        else:
+            print(f"{YELLOW}[INFO] Using existing local version of {parquet_file}...{NOCOLOR}")
+
+        nb_accessions = extract_accessions_from_parquet(parquet_file, f"{self.session_id}_acc.txt")
+        print(f"{YELLOW}[INFO] {nb_accessions} accessions extracted from {parquet_file}{NOCOLOR}")
+
+        job_results = fetch_json(f"{job_url}/results?limit=1")
+        if job_results and job_results.get("query_name"):
+            job_query_name = job_results["query_name"]
+            with open(abs_query_file, "r") as f:
+                header_fields = f.readline().strip().lstrip(">").split()
+            user_query_name = header_fields[0] if header_fields else ""
+            print(f"{YELLOW}[INFO] Logan Search job {self.session_id} was run with query '{job_query_name}'{NOCOLOR}")
+            if user_query_name != job_query_name:
+                print(f"{YELLOW}[WARNING] The provided query file ({abs_query_file}) is named '{user_query_name}', "
+                      f"not '{job_query_name}'. Check that it is the sequence used for this job.{NOCOLOR}")
+
+        shutil.copy(abs_query_file, ".")
+        os.chdir("..")
+        self.accession_file = os.path.join(self.INPUT_DATA_DIR_NAME, f"{self.session_id}_acc.txt")
+        self.query_file = os.path.join(self.INPUT_DATA_DIR_NAME, os.path.basename(abs_query_file))
+
+    def _setup_kmviz_session(self):
         os.makedirs(self.INPUT_DATA_DIR_NAME, exist_ok=True)
         os.chdir(self.INPUT_DATA_DIR_NAME)
         accession_file = f"accessions_{self.session_id}.txt"
@@ -467,7 +586,7 @@ class LoganBlaster:
         if not self.session_id:
             self._setup_local_files(abs_query_file, abs_accession_file)
         else:
-            self._setup_session()
+            self._setup_session(abs_query_file)
 
         if not os.path.exists(self.query_file):
             print(f"{RED}Error: Query file '{self.query_file}' does not exist.{NOCOLOR}")
@@ -483,13 +602,17 @@ class LoganBlaster:
 
 def main():
     parser = argparse.ArgumentParser(description="Process Logan session or accession/query files.")
-    parser.add_argument("-s", "--session", type=str, help="Logan session ID")
-    parser.add_argument("-a", "--accessions", type=str, help="Path to accessions.txt file or .csv file (containing a first header line, ignored, and storing accessions as the first column)")
+    parser.add_argument("-s", "--session", type=str,
+                        help="Logan Search job ID (e.g. 2f780abfeae3f54e, requires --query) "
+                             "or legacy logan-search.org session ID (kmviz-...)")
+    parser.add_argument("-a", "--accessions", type=str, help="Path to accessions.txt file, or .csv file (containing a first header line, ignored, and storing accessions as the first column), or .parquet / .tsv file exported from Logan Search")
     parser.add_argument("-q", "--query", type=str, help="Path to query fasta file")
     parser.add_argument("-o", "--output", type=str, default=None, help="Output directory name (default: based on query name if using --accessions and --query or session ID if using --session)")
     parser.add_argument("-u", "--unitigs", action="store_true", help="Use unitigs instead of contigs")
     parser.add_argument("-k", "--kmer-size", type=int, default=17, help="K-mer size for sequence recruitment")
     parser.add_argument("-l", "--limit", type=int, default=0, help="Limit number of accessions to process")
+    parser.add_argument("--api-url", type=str, default=DEFAULT_LOGAN_SEARCH_API,
+                        help="Logan Search API base URL, used with a Logan Search job ID")
     parser.add_argument("-d", "--delete", action="store_true", help="Delete intermediate files after processing")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = parser.parse_args()
@@ -499,9 +622,23 @@ def main():
         print(f"{RED}Error: You must provide either --session (-s) or both --accessions (-a) and --query (-q).{NOCOLOR}")
         sys.exit(1)
 
-    if args.session and (args.accessions or args.query):
-        print(f"{RED}Error: --session (-s) cannot be combined with --accessions (-a) or --query (-q).{NOCOLOR}")
+    if args.session and args.accessions:
+        print(f"{RED}Error: --session (-s) cannot be combined with --accessions (-a).{NOCOLOR}")
         sys.exit(1)
+
+    kmviz_session = bool(args.session) and is_kmviz_session(args.session)
+    if kmviz_session and args.query:
+        print(f"{RED}Error: a legacy session (kmviz-...) already contains its query: --query (-q) cannot be used.{NOCOLOR}")
+        sys.exit(1)
+
+    if args.session and not kmviz_session:
+        if not args.query:
+            print(f"{RED}Error: Logan Search does not provide the query sequence of job {args.session}. "
+                  f"Please provide it with --query (-q).{NOCOLOR}")
+            sys.exit(1)
+        if not os.path.isfile(args.query):
+            print(f"{RED}Error: Query file '{args.query}' does not exist.{NOCOLOR}")
+            sys.exit(1)
 
     if args.kmer_size <= 0:
         print(f"{RED}Error: K-mer size must be a positive integer.{NOCOLOR}")
@@ -514,7 +651,8 @@ def main():
     if shutil.which("count_logan_tig_coverage") is None:
         print(f"{YELLOW}[WARNING] 'count_logan_tig_coverage' not found — coverage statistics will be skipped.{NOCOLOR}")
 
-    for cmd in ["back_to_sequences", "blastn", "jq"]:
+    required_tools = ["back_to_sequences", "blastn"] + (["jq", "unzip"] if kmviz_session else [])
+    for cmd in required_tools:
         if shutil.which(cmd) is None:
             print(f"{RED}Error: '{cmd}' could not be found. Please install it and ensure it's in your PATH.{NOCOLOR}")
             sys.exit(1)
@@ -532,6 +670,7 @@ def main():
         kmer_size=args.kmer_size,
         limit=args.limit,
         output_dir=args.output,
+        api_url=args.api_url,
     )
     blaster.run(abs_query_file=abs_query_file, abs_accession_file=abs_accession_file)
 

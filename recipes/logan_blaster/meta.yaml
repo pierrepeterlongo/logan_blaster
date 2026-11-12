@@ -31,6 +31,7 @@ requirements:
     - python >=3.8
     - blast
     - jq
+    - pyarrow
     - back_to_sequences
     - wget
     - count_logan_tig_coverage
