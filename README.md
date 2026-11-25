@@ -5,10 +5,13 @@
 
 Align genomic sequences with [Logan](https://github.com/IndexThePlanet/Logan/) contigs or unitigs.
 
-## Two main modes
-1. From a query and a list of Logan accessions.  
-2. From a [Logan Search](https://logan.dev.brc-analytics.org/) job id (*e.g.* `2f780abfeae3f54e`, as in `https://logan.dev.brc-analytics.org/results?job=2f780abfeae3f54e`). The Logan accessions are automatically retrieved from the parquet export of the job (requires [pyarrow](https://arrow.apache.org/docs/python/)). The API does not provide the query sequence, so it must be given with `-q`.
-3. From a legacy [logan-search.org](https://logan-search.org/) session id (`kmviz-...`). The query and Logan accessions are then automatically retrieved.
+## Three main modes
+1. From a [logan-search.org](https://logan-search.org/) session id (*e.g.* `kmviz-4563ab1a-82d7-4463-bedd-bd1604a5c981`). The session archive is downloaded from `https://logan-search.org/api/download/<session_id>`, and the query and Logan accessions are read from its `session.json` file.
+2. From a [Logan Search (brc-analytics)](https://dev.brc-analytics.org/logan-search) job id (*e.g.* `58831987628c3b84`) or job URL (*e.g.* `https://dev.brc-analytics.org/logan-search?job=58831987628c3b84`). The query and Logan accessions are read from the parquet export of the job (requires [pyarrow](https://arrow.apache.org/docs/python/)): the query is stored in the `logan.query_fasta` metadata of the parquet file.
+3. From a list of Logan accessions and a query.
+
+In modes 1 and 2, accessions are processed by decreasing score (k-mer coverage), and a custom query may still be given with `-q` (a warning is printed if it differs from the query of the session / job).
+Already downloaded files can be given with `-a` instead of `-s`: a logan-search.org session (`.zip` archive or its `session.json` file) or a brc-analytics `.parquet` export. `-q` is then optional.
 
 In any case, for each accession, `logan_blaster` 
 1. Downloads the Logan contigs,
@@ -33,7 +36,7 @@ conda activate logan_blaster
 
 - blast: *on mac* `brew install blast` or look at [blast installation web page](https://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/)
 - back_to_sequences: see back_to_sequences installation [web page](https://b2s-doc.readthedocs.io/en/latest/usage.html#installation])
-- jq: see [jq installation web page](https://jqlang.org/)
+- pyarrow: `pip install pyarrow` (only for brc-analytics parquet files)
 - count_tig_coverage: `cargo install --git https://github.com/pierrepeterlongo/count_logan_tig_coverage`
 
 #### Clone the repository
@@ -57,38 +60,54 @@ Process Logan session or accession/query files.
 options:
   -h, --help            show this help message and exit
   -s, --session SESSION
-                        Logan Search job ID (e.g. 2f780abfeae3f54e, requires --query)
-                        or legacy logan-search.org session ID (kmviz-...)
+                        brc-analytics Logan Search job ID (e.g. 58831987628c3b84) or job URL
+                        (e.g. https://dev.brc-analytics.org/logan-search?job=58831987628c3b84),
+                        or logan-search.org session ID (e.g. kmviz-4563ab1a-82d7-4463-bedd-bd1604a5c981)
   -a, --accessions ACCESSIONS
-                        Path to accessions.txt file, or a .csv file 
-                        (containing a first header line, ignored, 
-                        and storing accessions as the first column),
-                        or a .parquet / .tsv file exported from Logan Search
-  -q, --query QUERY     Path to query fasta file
+                        Path to accessions.txt file, or .csv file (containing a first header
+                        line, ignored, and storing accessions as the first column), or
+                        brc-analytics Logan Search .parquet export, or logan-search.org
+                        session (.zip archive or its session.json file)
+  -q, --query QUERY     Path to query fasta file. Optional with a session / job ID, a .parquet,
+                        .json or .zip file, that provide the query (if given, it is used instead
+                        of the provided query)
   -u, --unitigs         Use unitigs instead of contigs
   -k, --kmer-size KMER_SIZE
                         K-mer size for sequence recruitment
   -l, --limit LIMIT     Limit number of accessions to process
   --api-url API_URL     Logan Search API base URL, used with a Logan Search job ID
-                        (default: https://logan.dev.brc-analytics.org/api/v1)
+                        (default: derived from the job URL if given,
+                        else https://dev.brc-analytics.org/api/v1)
   -d, --delete          Delete intermediate files after processing
 ```
 
 ## Examples
 
-### Example running from a Logan Search job id.
+### Example running from a logan-search.org session.
 
 ```bash
-logan_blaster -s 2f780abfeae3f54e -q my_query.fa -l 10
+logan_blaster -s kmviz-4563ab1a-82d7-4463-bedd-bd1604a5c981 -l 10
 ```
 
-Accessions are processed in the order of the export (decreasing score). Jobs may return tens of thousands of accessions: use `-l` to limit their number.
-The parquet export (with SRA metadata) is kept in `input_data/<job_id>.parquet`.
+The session archive and its `session.json` file are kept in `input_data/`, and the query in `input_data/<session_id>_query.fa`.
 
-### Example running from a legacy session.
+### Example running from a brc-analytics Logan Search job.
 
 ```bash
-logan_blaster -s kmviz-b2bce461-ca13-4a45-b0b4-6c894eacf103
+logan_blaster -s 58831987628c3b84 -l 10
+# or, equivalently
+logan_blaster -s "https://dev.brc-analytics.org/logan-search?job=58831987628c3b84" -l 10
+```
+
+Jobs may return tens of thousands of accessions: use `-l` to limit their number.
+The parquet export (with SRA metadata) is kept in `input_data/<job_id>.parquet`, and the query of the job in `input_data/<job_id>_query.fa`.
+
+### Example running from already downloaded files.
+
+```bash
+logan_blaster -a kmviz-4563ab1a-82d7-4463-bedd-bd1604a5c981.zip   # logan-search.org session archive
+logan_blaster -a session.json                                     # its session.json file
+logan_blaster -a 58831987628c3b84.parquet                         # brc-analytics parquet export
 ```
 
 ### Example running from accessions and query files.
