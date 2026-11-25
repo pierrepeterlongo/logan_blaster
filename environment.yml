@@ -8,7 +8,7 @@ dependencies:
   - blast
   - pip
   - setuptools
-  - jq
+  - pyarrow
   - rust
   - pip:
     - --editable .

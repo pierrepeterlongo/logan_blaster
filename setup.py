@@ -7,6 +7,7 @@ setup(name = 'logan_blaster',
     author = 'Pierre Peterlongo',
     py_modules=['logan_blaster'],
     python_requires='>=3.8',
+    install_requires=['pyarrow'],
     entry_points={
         'console_scripts': [
             'logan_blaster=logan_blaster:main',

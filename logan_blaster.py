@@ -5,8 +5,11 @@ import argparse
 import subprocess
 import shutil
 from urllib.request import urlopen
+from urllib.parse import urlparse, parse_qs
 from pathlib import Path
 import ssl
+import json
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
 __author__ = 'Pierre Peterlongo'
@@ -162,14 +165,159 @@ def download_file(url, destination):
         sys.exit(1)
 
 
+# Logan Search (kmindex jobs served through Galaxy by BRC Analytics)
+DEFAULT_LOGAN_SEARCH_API = "https://dev.brc-analytics.org/api/v1"
+KMVIZ_SESSION_PREFIX = "kmviz-"
+# Key of the parquet schema metadata storing the query (fasta) used for the job
+PARQUET_QUERY_FASTA_KEY = b"logan.query_fasta"
+
+
+def parse_session_argument(session):
+    """Split a --session value into (session_id, api_url).
+
+    session may be a bare job / kmviz session ID, or a Logan Search URL such as
+    https://dev.brc-analytics.org/logan-search?job=58831987628c3b84. For a URL, the
+    API base URL is derived from its host (<scheme>://<host>/api/v1); otherwise api_url is None.
+    """
+    session = session.strip()
+    if not session.lower().startswith(("http://", "https://")):
+        return session, None
+    parsed = urlparse(session)
+    job_ids = parse_qs(parsed.query).get("job")
+    if not job_ids or not job_ids[0].strip():
+        print(f"{RED}Error: no 'job' parameter found in URL {session}.{NOCOLOR}")
+        sys.exit(1)
+    return job_ids[0].strip(), f"{parsed.scheme}://{parsed.netloc}/api/v1"
+
+
+def is_kmviz_session(session_id):
+    """True for logan-search.org sessions (kmviz-...), False for brc-analytics Logan Search job IDs."""
+    return session_id.startswith(KMVIZ_SESSION_PREFIX)
+
+
+def read_kmviz_session(session_json):
+    """Parse a logan-search.org (kmviz) session.json file.
+
+    Returns (query_fasta, accessions): the query as a fasta string, and the accessions
+    sorted by decreasing k-mer coverage (as in the logan-search.org result table).
+    A session containing several distinct queries is not supported.
+    """
+    with open(session_json, "r") as f:
+        session = json.load(f)
+    queries = {}
+    best_coverage = {}
+    for per_query in session.values():
+        for per_index in per_query.values():
+            for block in per_index.values():
+                if not isinstance(block, dict):
+                    continue
+                query = block.get("_query") or {}
+                if query.get("_name") and query.get("_seq"):
+                    queries[query["_name"]] = query["_seq"].strip()
+                metadata = block.get("_metadata") or {}
+                ids = metadata.get("ID") or {}
+                coverages = metadata.get("kmer_coverage") or {}
+                if isinstance(ids, list):
+                    ids = {str(i): accession for i, accession in enumerate(ids)}
+                    if isinstance(coverages, list):
+                        coverages = {str(i): coverage for i, coverage in enumerate(coverages)}
+                for row, accession in ids.items():
+                    if not accession or not str(accession).strip():
+                        continue
+                    accession = str(accession).strip()
+                    coverage = coverages.get(row)
+                    coverage = float(coverage) if coverage is not None else float("-inf")
+                    if accession not in best_coverage or coverage > best_coverage[accession]:
+                        best_coverage[accession] = coverage
+    if len(queries) > 1:
+        print(f"{RED}Error: {session_json} contains several queries ({', '.join(queries)}). "
+              f"This is not supported: use --accessions (-a) and --query (-q) instead.{NOCOLOR}")
+        sys.exit(1)
+    query_fasta = None
+    if queries:
+        name, sequence = next(iter(queries.items()))
+        query_fasta = f">{name}\n{sequence}\n"
+    accessions = sorted(best_coverage, key=lambda accession: -best_coverage[accession])
+    return query_fasta, accessions
+
+
+def extract_kmviz_session_json(zip_file, output_file):
+    """Extract the session.json file of a logan-search.org session zip archive into output_file."""
+    with zipfile.ZipFile(zip_file) as archive:
+        if "session.json" not in archive.namelist():
+            print(f"{RED}Error: {zip_file} does not contain a session.json file.{NOCOLOR}")
+            sys.exit(1)
+        with archive.open("session.json") as fin, open(output_file, "wb") as fout:
+            shutil.copyfileobj(fin, fout)
+
+
+def import_pyarrow_parquet():
+    """Return the pyarrow.parquet module, or exit with an explicit message if it cannot be imported."""
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as error:
+        print(f"{RED}Error: reading Logan Search parquet exports requires pyarrow, which could not be imported "
+              f"by {sys.executable}:{NOCOLOR}")
+        print(f"{RED}  {error}{NOCOLOR}")
+        print(f"{RED}Install it for this interpreter ({sys.executable} -m pip install pyarrow, "
+              f"or conda install -c conda-forge pyarrow).{NOCOLOR}")
+        sys.exit(1)
+    return pq
+
+
+def extract_accessions_from_parquet(parquet_file, output_file):
+    """Write the accessions of a Logan Search parquet export (one per line) into output_file.
+
+    Only the 'accession' column is read. Requires pyarrow.
+    Returns the number of written accessions.
+    """
+    pq = import_pyarrow_parquet()
+    nb_accessions = 0
+    parquet = pq.ParquetFile(parquet_file)
+    with open(output_file, "w") as fout:
+        for batch in parquet.iter_batches(columns=["accession"]):
+            for accession in batch.column(0).to_pylist():
+                if accession and accession.strip():
+                    fout.write(f"{accession.strip()}\n")
+                    nb_accessions += 1
+    return nb_accessions
+
+
+def read_query_from_parquet(parquet_file):
+    """Return the query fasta stored in the metadata of a Logan Search parquet export, or None.
+
+    Recent Logan Search exports store the query in the 'logan.query_fasta' schema metadata.
+    """
+    pq = import_pyarrow_parquet()
+    metadata = pq.ParquetFile(parquet_file).schema_arrow.metadata or {}
+    query_fasta = metadata.get(PARQUET_QUERY_FASTA_KEY)
+    if not query_fasta:
+        return None
+    query_fasta = query_fasta.decode("utf-8").strip()
+    if not query_fasta.startswith(">"):
+        return None
+    return query_fasta + "\n"
+
+
+def fasta_sequences(fasta_text):
+    """Return the list of (upper-case) sequences of a fasta text, headers being ignored."""
+    sequences = []
+    for record in fasta_text.split(">")[1:]:
+        lines = record.splitlines()
+        sequences.append("".join(line.strip() for line in lines[1:]).upper())
+    return sequences
+
+
 class LoganBlaster:
     LOGAN_DIR_NAME = "logan_data"
     ALIGNEMENT_DIR_NAME = "alignments"
     INPUT_DATA_DIR_NAME = "input_data"
     PREFETCH = 2  # number of accessions downloaded in advance
 
-    def __init__(self, session_id, accession_file, query_file, delete, unitigs, kmer_size, limit, output_dir):
+    def __init__(self, session_id, accession_file, query_file, delete, unitigs, kmer_size, limit, output_dir,
+                 api_url=DEFAULT_LOGAN_SEARCH_API):
         self.session_id = session_id
+        self.api_url = api_url.rstrip("/")
         self.accession_file = accession_file
         self.query_file = query_file
         self.delete = delete
@@ -187,7 +335,8 @@ class LoganBlaster:
             if self.session_id:
                 self.main_dir_name = f"session_{self.session_id}"
             else:
-                query_basename = os.path.basename(self.query_file).split(".")[0]
+                naming_file = self.query_file if self.query_file else self.accession_file
+                query_basename = os.path.basename(naming_file).split(".")[0]
                 found_free_name = False
                 for i in range(1, 1001):
                     candidate = f"{query_basename}_{i}"
@@ -209,54 +358,147 @@ class LoganBlaster:
             self.failed_accession_list = "failed_accessions.txt"
             Path(self.failed_accession_list).touch()
 
+    @staticmethod
+    def _write_query(source_fasta, abs_query_file, output_file, source_label):
+        """Write the query to use into output_file (in the current directory) and return its name.
+
+        source_fasta is the query provided by the input (logan-search.org session or
+        brc-analytics parquet export), or None. A user query (abs_query_file) has priority,
+        with a warning if its sequence differs from source_fasta.
+        """
+        if abs_query_file:
+            if source_fasta is not None:
+                with open(abs_query_file, "r") as f:
+                    user_sequences = fasta_sequences(f.read())
+                if user_sequences != fasta_sequences(source_fasta):
+                    print(f"{YELLOW}[WARNING] The provided query file ({abs_query_file}) differs from the query "
+                          f"of {source_label}. The provided query is used.{NOCOLOR}")
+            output_file = os.path.basename(abs_query_file)
+            if os.path.abspath(output_file) != abs_query_file:
+                shutil.copy(abs_query_file, output_file)
+            return output_file
+        if source_fasta is None:
+            print(f"{RED}Error: {source_label} does not contain the query sequence. "
+                  f"Please provide it with --query (-q).{NOCOLOR}")
+            sys.exit(1)
+        with open(output_file, "w") as f:
+            f.write(source_fasta)
+        print(f"{YELLOW}[INFO] Query of {source_label}: {source_fasta.lstrip('>').split(chr(10), 1)[0]}{NOCOLOR}")
+        return output_file
+
+    @staticmethod
+    def _write_accessions(accessions, output_file):
+        with open(output_file, "w") as f:
+            for accession in accessions:
+                f.write(f"{accession}\n")
+
     def _setup_local_files(self, abs_query_file, abs_accession_file):
         os.makedirs(self.INPUT_DATA_DIR_NAME, exist_ok=True)
-        shutil.copy(abs_query_file, self.INPUT_DATA_DIR_NAME)
-        shutil.copy(abs_accession_file, self.INPUT_DATA_DIR_NAME)
-        self.query_file = os.path.join(self.INPUT_DATA_DIR_NAME, os.path.basename(abs_query_file))
-        self.accession_file = os.path.join(self.INPUT_DATA_DIR_NAME, os.path.basename(abs_accession_file))
+        os.chdir(self.INPUT_DATA_DIR_NAME)
+        input_file = os.path.basename(abs_accession_file)
+        if os.path.abspath(input_file) != abs_accession_file:
+            shutil.copy(abs_accession_file, input_file)
+        basename, extension = os.path.splitext(input_file)
+        extension = extension.lower()
+        accession_file = input_file
+        query_file = None
 
-        if self.accession_file.endswith(".csv"):
-            accession_basename = self.accession_file.rstrip(".csv")
-            print(f"{YELLOW}[INFO] Extracting accession IDs from {accession_basename}.csv...{NOCOLOR}")
-            cmd_jq_acc = f"cat {accession_basename}.csv | tail -n +2 | cut -f 1 > {accession_basename}_acc.txt"
-            subprocess.run(cmd_jq_acc, shell=True, check=True)
-            self.accession_file = os.path.join(
-                self.INPUT_DATA_DIR_NAME, os.path.basename(f"{accession_basename}_acc.txt")
-            )
+        if extension == ".parquet":
+            print(f"{YELLOW}[INFO] Extracting accession IDs from {input_file}...{NOCOLOR}")
+            accession_file = f"{basename}_acc.txt"
+            extract_accessions_from_parquet(input_file, accession_file)
+            query_file = self._write_query(read_query_from_parquet(input_file), abs_query_file,
+                                           f"{basename}_query.fa", input_file)
+        elif extension in (".json", ".zip"):
+            session_json = input_file
+            if extension == ".zip":
+                session_json = f"{basename}.json"
+                extract_kmviz_session_json(input_file, session_json)
+            print(f"{YELLOW}[INFO] Extracting accession IDs and query from {session_json}...{NOCOLOR}")
+            query_fasta, accessions = read_kmviz_session(session_json)
+            accession_file = f"{basename}_acc.txt"
+            self._write_accessions(accessions, accession_file)
+            query_file = self._write_query(query_fasta, abs_query_file, f"{basename}_query.fa", input_file)
+        else:
+            if extension == ".csv":
+                print(f"{YELLOW}[INFO] Extracting accession IDs from {input_file}...{NOCOLOR}")
+                accession_file = f"{basename}_acc.txt"
+                with open(input_file, "r") as fin:
+                    fin.readline()
+                    accessions = [line.split("\t")[0].strip() for line in fin if line.split("\t")[0].strip()]
+                self._write_accessions(accessions, accession_file)
+            query_file = self._write_query(None, abs_query_file, None, input_file)
 
-    def _setup_session(self):
+        os.chdir("..")
+        self.accession_file = os.path.join(self.INPUT_DATA_DIR_NAME, accession_file)
+        self.query_file = os.path.join(self.INPUT_DATA_DIR_NAME, query_file)
+
+    def _setup_session(self, abs_query_file=None):
+        if is_kmviz_session(self.session_id):
+            self._setup_kmviz_session(abs_query_file)
+        else:
+            self._setup_search_job(abs_query_file)
+
+    def _setup_search_job(self, abs_query_file):
+        """Retrieve the accessions and the query of a brc-analytics Logan Search job.
+
+        Accessions are read from the parquet export of the job, and the query from its
+        metadata ('logan.query_fasta'). A user query (-q) has priority.
+        """
+        job_url = f"{self.api_url}/galaxy/kmindex/jobs/{self.session_id}"
         os.makedirs(self.INPUT_DATA_DIR_NAME, exist_ok=True)
         os.chdir(self.INPUT_DATA_DIR_NAME)
-        accession_file = f"accessions_{self.session_id}.txt"
-        if not os.path.exists(accession_file):
+
+        parquet_file = f"{self.session_id}.parquet"
+        if not os.path.exists(parquet_file):
+            print(f"{YELLOW}[INFO] Downloading Logan Search results for job {self.session_id} "
+                  f"from {self.api_url}...{NOCOLOR}")
+            download_file(f"{job_url}/export?format=parquet", f"{parquet_file}.part")
+            os.replace(f"{parquet_file}.part", parquet_file)
+        else:
+            print(f"{YELLOW}[INFO] Using existing local version of {parquet_file}...{NOCOLOR}")
+
+        accession_file = f"{self.session_id}_acc.txt"
+        nb_accessions = extract_accessions_from_parquet(parquet_file, accession_file)
+        print(f"{YELLOW}[INFO] {nb_accessions} accessions extracted from {parquet_file}{NOCOLOR}")
+        query_file = self._write_query(read_query_from_parquet(parquet_file), abs_query_file,
+                                       f"{self.session_id}_query.fa", f"Logan Search job {self.session_id}")
+
+        os.chdir("..")
+        self.accession_file = os.path.join(self.INPUT_DATA_DIR_NAME, accession_file)
+        self.query_file = os.path.join(self.INPUT_DATA_DIR_NAME, query_file)
+
+    def _setup_kmviz_session(self, abs_query_file):
+        """Retrieve the accessions and the query of a logan-search.org (kmviz) session.
+
+        The session zip archive is downloaded, and its session.json file is parsed.
+        """
+        os.makedirs(self.INPUT_DATA_DIR_NAME, exist_ok=True)
+        os.chdir(self.INPUT_DATA_DIR_NAME)
+        session_json = f"{self.session_id}.json"
+        if not os.path.exists(session_json):
             zip_file = f"{self.session_id}.zip"
             if not os.path.exists(zip_file):
                 print(f"{YELLOW}[INFO] Downloading session data for session ID {self.session_id}...{NOCOLOR}")
-                download_file(f"https://logan-search.org/api/download/{self.session_id}", zip_file)
+                download_file(f"https://logan-search.org/api/download/{self.session_id}", f"{zip_file}.part")
+                os.replace(f"{zip_file}.part", zip_file)
             else:
                 print(f"{YELLOW}[INFO] Using existing local version of {zip_file}...{NOCOLOR}")
+            extract_kmviz_session_json(zip_file, session_json)
+        else:
+            print(f"{YELLOW}[INFO] Using existing local version of {session_json}...{NOCOLOR}")
 
-            subprocess.run(["unzip", "-o", zip_file, "session.json"], check=True)
-            os.rename("session.json", f"{self.session_id}.json")
-
-            print(f"{YELLOW}[INFO] Extracting accession IDs from {self.session_id}.json...{NOCOLOR}")
-            cmd_jq_acc = f"jq -r '.. | ._metadata?.ID? // empty | .[]' {self.session_id}.json > {self.session_id}_acc.txt"
-            subprocess.run(cmd_jq_acc, shell=True, check=True)
-
-            print(f"{YELLOW}[INFO] Extracting query name and sequence from {self.session_id}.json...{NOCOLOR}")
-            with open(f"{self.session_id}_query.fa", "w") as f:
-                cmd_jq_name = f"jq -r '.. | ._query?._name? // empty' {self.session_id}.json"
-                query_name = subprocess.check_output(cmd_jq_name, shell=True, text=True).strip()
-                f.write(f">{query_name}\n")
-
-                cmd_jq_seq = f"jq -r '.. | ._query?._seq? // empty' {self.session_id}.json"
-                query_seq = subprocess.check_output(cmd_jq_seq, shell=True, text=True).strip()
-                f.write(f"{query_seq}\n")
+        print(f"{YELLOW}[INFO] Extracting accession IDs and query from {session_json}...{NOCOLOR}")
+        query_fasta, accessions = read_kmviz_session(session_json)
+        accession_file = f"{self.session_id}_acc.txt"
+        self._write_accessions(accessions, accession_file)
+        print(f"{YELLOW}[INFO] {len(accessions)} accessions extracted from {session_json}{NOCOLOR}")
+        query_file = self._write_query(query_fasta, abs_query_file, f"{self.session_id}_query.fa",
+                                       f"logan-search.org session {self.session_id}")
 
         os.chdir("..")
-        self.accession_file = os.path.join(self.INPUT_DATA_DIR_NAME, f"{self.session_id}_acc.txt")
-        self.query_file = os.path.join(self.INPUT_DATA_DIR_NAME, f"{self.session_id}_query.fa")
+        self.accession_file = os.path.join(self.INPUT_DATA_DIR_NAME, accession_file)
+        self.query_file = os.path.join(self.INPUT_DATA_DIR_NAME, query_file)
 
     def _run_coverage_stats(self, fasta_file, label):
         if shutil.which("count_logan_tig_coverage") is None:
@@ -467,7 +709,7 @@ class LoganBlaster:
         if not self.session_id:
             self._setup_local_files(abs_query_file, abs_accession_file)
         else:
-            self._setup_session()
+            self._setup_session(abs_query_file)
 
         if not os.path.exists(self.query_file):
             print(f"{RED}Error: Query file '{self.query_file}' does not exist.{NOCOLOR}")
@@ -483,24 +725,53 @@ class LoganBlaster:
 
 def main():
     parser = argparse.ArgumentParser(description="Process Logan session or accession/query files.")
-    parser.add_argument("-s", "--session", type=str, help="Logan session ID")
-    parser.add_argument("-a", "--accessions", type=str, help="Path to accessions.txt file or .csv file (containing a first header line, ignored, and storing accessions as the first column)")
-    parser.add_argument("-q", "--query", type=str, help="Path to query fasta file")
+    parser.add_argument("-s", "--session", type=str,
+                        help="brc-analytics Logan Search job ID (e.g. 58831987628c3b84) or job URL "
+                             "(e.g. https://dev.brc-analytics.org/logan-search?job=58831987628c3b84), "
+                             "or logan-search.org session ID (e.g. kmviz-4563ab1a-82d7-4463-bedd-bd1604a5c981)")
+    parser.add_argument("-a", "--accessions", type=str,
+                        help="Path to accessions.txt file, or .csv file (containing a first header line, ignored, "
+                             "and storing accessions as the first column), or brc-analytics Logan Search .parquet "
+                             "export, or logan-search.org session (.zip archive or its session.json file)")
+    parser.add_argument("-q", "--query", type=str,
+                        help="Path to query fasta file. Optional with a session / job ID, a .parquet, .json or .zip "
+                             "file, that provide the query (if given, it is used instead of the provided query)")
     parser.add_argument("-o", "--output", type=str, default=None, help="Output directory name (default: based on query name if using --accessions and --query or session ID if using --session)")
     parser.add_argument("-u", "--unitigs", action="store_true", help="Use unitigs instead of contigs")
     parser.add_argument("-k", "--kmer-size", type=int, default=17, help="K-mer size for sequence recruitment")
     parser.add_argument("-l", "--limit", type=int, default=0, help="Limit number of accessions to process")
+    parser.add_argument("--api-url", type=str, default=None,
+                        help="Logan Search API base URL, used with a Logan Search job ID "
+                             f"(default: derived from the job URL if given, else {DEFAULT_LOGAN_SEARCH_API})")
     parser.add_argument("-d", "--delete", action="store_true", help="Delete intermediate files after processing")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = parser.parse_args()
 
     # Argument checks
-    if not args.session and (not args.accessions or not args.query):
-        print(f"{RED}Error: You must provide either --session (-s) or both --accessions (-a) and --query (-q).{NOCOLOR}")
+    api_url = args.api_url
+    if args.session:
+        args.session, url_api = parse_session_argument(args.session)
+        if api_url is None:
+            api_url = url_api
+    if api_url is None:
+        api_url = DEFAULT_LOGAN_SEARCH_API
+
+    query_in_accessions = bool(args.accessions) and args.accessions.lower().endswith((".parquet", ".json", ".zip"))
+    if not args.session and (not args.accessions or (not args.query and not query_in_accessions)):
+        print(f"{RED}Error: You must provide either --session (-s), or both --accessions (-a) and --query (-q) "
+              f"(--query is optional with a .parquet, .json or .zip file).{NOCOLOR}")
         sys.exit(1)
 
-    if args.session and (args.accessions or args.query):
-        print(f"{RED}Error: --session (-s) cannot be combined with --accessions (-a) or --query (-q).{NOCOLOR}")
+    if args.session and args.accessions:
+        print(f"{RED}Error: --session (-s) cannot be combined with --accessions (-a).{NOCOLOR}")
+        sys.exit(1)
+
+    if args.accessions and not os.path.isfile(args.accessions):
+        print(f"{RED}Error: Accessions file '{args.accessions}' does not exist.{NOCOLOR}")
+        sys.exit(1)
+
+    if args.query and not os.path.isfile(args.query):
+        print(f"{RED}Error: Query file '{args.query}' does not exist.{NOCOLOR}")
         sys.exit(1)
 
     if args.kmer_size <= 0:
@@ -514,7 +785,7 @@ def main():
     if shutil.which("count_logan_tig_coverage") is None:
         print(f"{YELLOW}[WARNING] 'count_logan_tig_coverage' not found — coverage statistics will be skipped.{NOCOLOR}")
 
-    for cmd in ["back_to_sequences", "blastn", "jq"]:
+    for cmd in ["back_to_sequences", "blastn"]:
         if shutil.which(cmd) is None:
             print(f"{RED}Error: '{cmd}' could not be found. Please install it and ensure it's in your PATH.{NOCOLOR}")
             sys.exit(1)
@@ -532,6 +803,7 @@ def main():
         kmer_size=args.kmer_size,
         limit=args.limit,
         output_dir=args.output,
+        api_url=api_url,
     )
     blaster.run(abs_query_file=abs_query_file, abs_accession_file=abs_accession_file)
 
