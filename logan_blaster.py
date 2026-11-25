@@ -251,18 +251,27 @@ def extract_kmviz_session_json(zip_file, output_file):
             shutil.copyfileobj(fin, fout)
 
 
+def import_pyarrow_parquet():
+    """Return the pyarrow.parquet module, or exit with an explicit message if it cannot be imported."""
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as error:
+        print(f"{RED}Error: reading Logan Search parquet exports requires pyarrow, which could not be imported "
+              f"by {sys.executable}:{NOCOLOR}")
+        print(f"{RED}  {error}{NOCOLOR}")
+        print(f"{RED}Install it for this interpreter ({sys.executable} -m pip install pyarrow, "
+              f"or conda install -c conda-forge pyarrow).{NOCOLOR}")
+        sys.exit(1)
+    return pq
+
+
 def extract_accessions_from_parquet(parquet_file, output_file):
     """Write the accessions of a Logan Search parquet export (one per line) into output_file.
 
     Only the 'accession' column is read. Requires pyarrow.
     Returns the number of written accessions.
     """
-    try:
-        import pyarrow.parquet as pq
-    except ImportError:
-        print(f"{RED}Error: reading Logan Search parquet exports requires pyarrow "
-              f"(pip install pyarrow, or conda install -c conda-forge pyarrow).{NOCOLOR}")
-        sys.exit(1)
+    pq = import_pyarrow_parquet()
     nb_accessions = 0
     parquet = pq.ParquetFile(parquet_file)
     with open(output_file, "w") as fout:
@@ -279,12 +288,7 @@ def read_query_from_parquet(parquet_file):
 
     Recent Logan Search exports store the query in the 'logan.query_fasta' schema metadata.
     """
-    try:
-        import pyarrow.parquet as pq
-    except ImportError:
-        print(f"{RED}Error: reading Logan Search parquet exports requires pyarrow "
-              f"(pip install pyarrow, or conda install -c conda-forge pyarrow).{NOCOLOR}")
-        sys.exit(1)
+    pq = import_pyarrow_parquet()
     metadata = pq.ParquetFile(parquet_file).schema_arrow.metadata or {}
     query_fasta = metadata.get(PARQUET_QUERY_FASTA_KEY)
     if not query_fasta:
