@@ -7,7 +7,7 @@ Align genomic sequences with [Logan](https://github.com/IndexThePlanet/Logan/) c
 
 ## Three main modes
 1. From a [logan-search.org](https://logan-search.org/) session id (*e.g.* `kmviz-4563ab1a-82d7-4463-bedd-bd1604a5c981`). The session archive is downloaded from `https://logan-search.org/api/download/<session_id>`, and the query and Logan accessions are read from its `session.json` file.
-2. From a [Logan Search (brc-analytics)](https://dev.brc-analytics.org/logan-search) job id (*e.g.* `58831987628c3b84`) or job URL (*e.g.* `https://dev.brc-analytics.org/logan-search?job=58831987628c3b84`). The query and Logan accessions are read from the parquet export of the job (requires [pyarrow](https://arrow.apache.org/docs/python/)): the query is stored in the `logan.query_fasta` metadata of the parquet file.
+2. From a [Logan Search (brc-analytics)](https://brc-analytics.org/logan-search) job id or job URL (*e.g.* `https://brc-analytics.org/logan-search?job=<job_id>`). A bare job id is looked up on `https://brc-analytics.org`; for a job run on another instance (*e.g.* `dev.brc-analytics.org`), give its full URL or `--api-url`. The query and Logan accessions are read from the parquet export of the job (requires [pyarrow](https://arrow.apache.org/docs/python/)): the query is stored in the `logan.query_fasta` metadata of the parquet file.
 3. From a list of Logan accessions and a query.
 
 In modes 1 and 2, accessions are processed by decreasing score (k-mer coverage), and a custom query may still be given with `-q` (a warning is printed if it differs from the query of the session / job).
@@ -60,8 +60,8 @@ Process Logan session or accession/query files.
 options:
   -h, --help            show this help message and exit
   -s, --session SESSION
-                        brc-analytics Logan Search job ID (e.g. 58831987628c3b84) or job URL
-                        (e.g. https://dev.brc-analytics.org/logan-search?job=58831987628c3b84),
+                        brc-analytics Logan Search job ID or job URL
+                        (e.g. https://brc-analytics.org/logan-search?job=<job_id>),
                         or logan-search.org session ID (e.g. kmviz-4563ab1a-82d7-4463-bedd-bd1604a5c981)
   -a, --accessions ACCESSIONS
                         Path to accessions.txt file, or .csv file (containing a first header
@@ -77,7 +77,7 @@ options:
   -l, --limit LIMIT     Limit number of accessions to process
   --api-url API_URL     Logan Search API base URL, used with a Logan Search job ID
                         (default: derived from the job URL if given,
-                        else https://dev.brc-analytics.org/api/v1)
+                        else https://brc-analytics.org/api/v1)
   -d, --delete          Delete intermediate files after processing
 ```
 
@@ -94,9 +94,11 @@ The session archive and its `session.json` file are kept in `input_data/`, and t
 ### Example running from a brc-analytics Logan Search job.
 
 ```bash
-logan_blaster -s 58831987628c3b84 -l 10
+logan_blaster -s <job_id> -l 10
 # or, equivalently
-logan_blaster -s "https://dev.brc-analytics.org/logan-search?job=58831987628c3b84" -l 10
+logan_blaster -s "https://brc-analytics.org/logan-search?job=<job_id>" -l 10
+# job run on the dev instance: give its full URL (or --api-url https://dev.brc-analytics.org/api/v1)
+logan_blaster -s "https://dev.brc-analytics.org/logan-search?job=<job_id>" -l 10
 ```
 
 Jobs may return tens of thousands of accessions: use `-l` to limit their number.
