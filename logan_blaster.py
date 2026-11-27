@@ -153,7 +153,7 @@ def run_blast_parser(fasta_file, blastn_file, abundance=False):
     visualize_matches(query_ACGT, query_name, query_length, matched_positions, print_abundance=abundance)
 
 
-def download_file(url, destination):
+def download_file(url, destination, hint=None):
     try:
         context = ssl._create_unverified_context()
         with urlopen(url, context=context) as response, open(destination, "wb") as f:
@@ -162,11 +162,13 @@ def download_file(url, destination):
     except Exception as e:
         print(f"{RED}Error: Failed to download {url}.{NOCOLOR}")
         print(e)
+        if hint:
+            print(f"{YELLOW}[HINT] {hint}{NOCOLOR}")
         sys.exit(1)
 
 
 # Logan Search (kmindex jobs served through Galaxy by BRC Analytics)
-DEFAULT_LOGAN_SEARCH_API = "https://dev.brc-analytics.org/api/v1"
+DEFAULT_LOGAN_SEARCH_API = "https://brc-analytics.org/api/v1"
 KMVIZ_SESSION_PREFIX = "kmviz-"
 # Key of the parquet schema metadata storing the query (fasta) used for the job
 PARQUET_QUERY_FASTA_KEY = b"logan.query_fasta"
@@ -176,7 +178,7 @@ def parse_session_argument(session):
     """Split a --session value into (session_id, api_url).
 
     session may be a bare job / kmviz session ID, or a Logan Search URL such as
-    https://dev.brc-analytics.org/logan-search?job=58831987628c3b84. For a URL, the
+    https://brc-analytics.org/logan-search?job=<job_id>. For a URL, the
     API base URL is derived from its host (<scheme>://<host>/api/v1); otherwise api_url is None.
     """
     session = session.strip()
@@ -453,7 +455,11 @@ class LoganBlaster:
         if not os.path.exists(parquet_file):
             print(f"{YELLOW}[INFO] Downloading Logan Search results for job {self.session_id} "
                   f"from {self.api_url}...{NOCOLOR}")
-            download_file(f"{job_url}/export?format=parquet", f"{parquet_file}.part")
+            download_file(f"{job_url}/export?format=parquet", f"{parquet_file}.part",
+                          hint=f"Job {self.session_id} was looked up on {self.api_url}. A job run on another "
+                               f"brc-analytics instance (e.g. dev) is only visible there: pass the full job URL "
+                               f"(e.g. https://dev.brc-analytics.org/logan-search?job={self.session_id}) "
+                               f"or --api-url.")
             os.replace(f"{parquet_file}.part", parquet_file)
         else:
             print(f"{YELLOW}[INFO] Using existing local version of {parquet_file}...{NOCOLOR}")
@@ -726,8 +732,8 @@ class LoganBlaster:
 def main():
     parser = argparse.ArgumentParser(description="Process Logan session or accession/query files.")
     parser.add_argument("-s", "--session", type=str,
-                        help="brc-analytics Logan Search job ID (e.g. 58831987628c3b84) or job URL "
-                             "(e.g. https://dev.brc-analytics.org/logan-search?job=58831987628c3b84), "
+                        help="brc-analytics Logan Search job ID or job URL "
+                             "(e.g. https://brc-analytics.org/logan-search?job=<job_id>), "
                              "or logan-search.org session ID (e.g. kmviz-4563ab1a-82d7-4463-bedd-bd1604a5c981)")
     parser.add_argument("-a", "--accessions", type=str,
                         help="Path to accessions.txt file, or .csv file (containing a first header line, ignored, "

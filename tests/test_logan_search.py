@@ -5,6 +5,7 @@ import zipfile
 import pytest
 
 from logan_blaster import (
+    DEFAULT_LOGAN_SEARCH_API,
     extract_accessions_from_parquet,
     extract_kmviz_session_json,
     fasta_sequences,
@@ -34,8 +35,14 @@ def test_extract_accessions_from_parquet(tmp_path):
 def test_parse_session_argument():
     assert parse_session_argument("58831987628c3b84") == ("58831987628c3b84", None)
     assert parse_session_argument("kmviz-b2bce461") == ("kmviz-b2bce461", None)
+    assert parse_session_argument("https://brc-analytics.org/logan-search?job=58831987628c3b84") == (
+        "58831987628c3b84", "https://brc-analytics.org/api/v1")
     assert parse_session_argument("https://dev.brc-analytics.org/logan-search?job=58831987628c3b84") == (
         "58831987628c3b84", "https://dev.brc-analytics.org/api/v1")
+
+
+def test_default_api_is_prod():
+    assert DEFAULT_LOGAN_SEARCH_API == "https://brc-analytics.org/api/v1"
 
 
 def test_parse_session_argument_url_without_job():
